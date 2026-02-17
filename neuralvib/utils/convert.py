@@ -82,39 +82,6 @@ def _convert_aJ_to_Hartree(energy_in_aJ: float) -> float:
     return energy_in_aJ * convert_coefficient
 
 
-def _convert_Hartree_to_aJ(energy_in_Hartree: float) -> float:
-    """Convert energy from Hartree (E_h)
-    to aJ
-
-    Args:
-        energy_in_Hartree: the energy in unit of Hartree,
-            E_h
-
-    Returns:
-        energy_in_aJ: the corresponding energy in
-            unit of aJ.
-    """
-    convert_coefficient = 4.359748
-    return energy_in_Hartree * convert_coefficient
-
-
-def _convert_aJ_to_inverse_cm(energy_in_aJ: float) -> float:
-    """Convert energy from attojoule (aJ)
-    to wavenumber cm^{-1}
-
-    Args:
-        energy_in_aJ: the energy in unit of attojoule,
-            aJ. (1aJ = 1e-18 J)
-
-    Returns:
-        energy_in_inverse_cm: the corresponding energy in
-            unit of wavenumber cm^{-1}
-    """
-    coefficient = 50341.1
-    energy_in_inverse_cm = coefficient * energy_in_aJ
-    return energy_in_inverse_cm
-
-
 def _convert_angstrom_to_a0(
     length_in_angstrom: Union[float, np.ndarray]
 ) -> Union[float, np.ndarray]:

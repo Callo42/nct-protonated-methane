@@ -10,17 +10,6 @@ from neuralvib.networks import flow_RNVP
 from neuralvib.networks.flow_MoleNet import MoleNetFlow
 
 
-def print_network_config(config: dict) -> None:
-    """Pring the network settings
-
-    Args:
-        config: the dict that contains the network
-            type and corresponding network configs.
-
-    """
-    raise NotImplementedError
-
-
 def setting_network(
     input_args: argparse.Namespace,
 ) -> dict:
@@ -58,20 +47,6 @@ def setting_network(
             "mlp_depth": mlp_depth,
         }
         flow_string = f"_rnvp_{flow_depth}_mlp_{mlp_width}_{mlp_depth}"
-    elif flow_type == "FermiNetCH4":
-        raise NotImplementedError(f"flow_type={flow_type} Not Implemented!")
-        ferminet_spsize = input_args.ferminet_spsize
-        ferminet_tpsize = input_args.ferminet_tpsize
-        ferminet_init_stddev = input_args.ferminet_init_stddev
-        network_config["other_parameters"] = {
-            "ferminet_spsize": ferminet_spsize,
-            "ferminet_tpsize": ferminet_tpsize,
-            "ferminet_init_stddev": ferminet_init_stddev,
-        }
-        flow_string = (
-            f"_ferminet_depth_{flow_depth}_spsize_{ferminet_spsize}"
-            f"_tpsize_{ferminet_tpsize}"
-        )
     elif flow_type == "MoleNet":
         molenet_spsize = input_args.molenet_spsize
         molenet_tpsize = input_args.molenet_tpsize
@@ -118,31 +93,6 @@ def make_flow(
             network_config["other_parameters"]["mlp_depth"],
             input_args.num_of_particles * input_args.dim,
         )
-    elif network_config["flow_type"] == "FermiNetCH4":
-        raise NotImplementedError(
-            f"Network config = {network_config["flow_type"]} is not implemented!"
-        )
-        # NOTE: currently onle implemented for CH4!
-        # if input_args.molecule != "CH4":
-        #     raise NotImplementedError(
-        #         "Currently FermiNetCH4 is only implemented for CH4!\n"
-        #     )
-        # cartesian_coor_dim = 3
-        # select_potential = "J.Chem.Phys.102,254-261(1995)"
-        # ch4_object = CH4PESNormalCoor(select_potential=select_potential, alpha=1.0)
-
-        # def flow_fn(x):
-        #     flow = flow_FermiNet.FermiNetCH4(
-        #         depth=network_config["flow_depth"],
-        #         spsize=network_config["other_parameters"]["ferminet_spsize"],
-        #         tpsize=network_config["other_parameters"]["ferminet_tpsize"],
-        #         cartesian_coor_dim=cartesian_coor_dim,
-        #         ch4_object=ch4_object,
-        #         init_stddev=network_config["other_parameters"]["ferminet_init_stddev"],
-        #     )
-        #     return flow(x)
-
-        # flow = hk.transform(flow_fn)
     elif network_config["flow_type"] == "MoleNet":
 
         def flow_fn(x):

@@ -11,22 +11,16 @@ import jax.numpy as jnp
 
 from neuralvib.molecule.ch5plus.JBB_Full_PES.convert_coors import (
     config_cartesian2jbb_cartesian_input_xn,
-    config_cartesian2jbb_ch5ppot_cart_input,
-    config_cartesian2jbb_polar_input,
 )
 from neuralvib.molecule.ch5plus.JBB_Full_PES.jbbjax import (
     jbbexternal,
-    jbbexternal_withreject,
     jbbjax_cartesian,
-    jbbjax_ch5ppot_cart,
-    jbbjax_polar,
 )
 from neuralvib.molecule.ch5plus.pyscf_PES.CCSD import (
     pyscf_ccsd_jax_pure_cartesian,
     pyscf_ccsd_pes_cartesian,
 )
 from neuralvib.molecule.ch5plus.pyscf_PES.dft import (
-    pyscf_dft_jax_io_cartesian,
     pyscf_dft_jax_pure_cartesian,
     pyscf_dft_pes_cartesian,
 )
@@ -176,7 +170,6 @@ class CH5Plus(MoleculeBase):
         elif (
             self._select_potential == "External.J.Phys.Chem.A2006,110,1569-1574.Joblib"
         ):
-            # _pes_origin_func = jbbexternal_withreject
             _pes_origin_func = jbbexternal
         elif self._select_potential == "PySCF.HF.pure":
             _pes_origin_func = pyscf_hf_jax_pure_cartesian

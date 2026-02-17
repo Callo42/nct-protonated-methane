@@ -8,11 +8,6 @@ from argparse import Namespace
 import jax
 import numpy as np
 
-from neuralvib.molecule.ch5plus.ch5_plus_jacobi import CH5PlusJacobi
-from neuralvib.molecule.ch5plus.ch5_plus_no_carbon import CH5PlusNoCarbon
-from neuralvib.molecule.ch5plus.stationary_points import (
-    saddle_c2v_bowman_jpca_2006_110_1569_1574,
-)
 from neuralvib.molecule.molecule_base import MoleculeBase
 from neuralvib.molecule.ch5plus.ch5_plus import CH5Plus
 from neuralvib.molecule.ch5plus.equilibrium_config import (
@@ -26,49 +21,6 @@ from neuralvib.utils.convert import (
 )
 
 
-def energy_priority_queue(num_orbs: int, omegas: np.ndarray) -> np.ndarray:
-    """
-    Generate excitation number configurations for a given number of orbitals,
-    the number of excitation indices of each state is the same as the length
-    of the omegas. The indices for different states are sorted by their total
-    energy in ascending order supposing that each excitation of each state
-    is associated with the corresponding omega.
-
-    Args:
-        num_orbs: Number of excitation configurations (rows) to generate.
-        omegas: (n_cols,) array of basis frequencies for each variable.
-
-    Returns:
-        sequence: (num_orbs, n_cols) array of excitation numbers, each row
-            representing a unique configuration, sorted by increasing energy.
-    """
-    assert len(omegas.shape) == 1, "Omegas should be a 1D array."
-    n_cols = len(omegas)
-    dim = 3
-
-    # Using min-heap to create a priority queue
-    # (energy, combo_tuple)
-    min_heap = [(0.0, tuple([0] * n_cols))]
-    visited = {tuple([0] * n_cols)}
-    sequence = []
-
-    while len(sequence) < num_orbs and min_heap:
-        energy, combo_tuple = heapq.heappop(min_heap)
-        sequence.append(list(combo_tuple))
-
-        for i in range(n_cols):
-            new_combo = list(combo_tuple)
-            new_combo[i] += 1
-            new_combo_tuple = tuple(new_combo)
-
-            if new_combo_tuple not in visited:
-                visited.add(new_combo_tuple)
-                new_energy = energy + omegas[i]
-                heapq.heappush(min_heap, (new_energy, new_combo_tuple))
-    sequence = np.array(sequence, dtype=int)
-    return sequence
-
-
 class InitMolecule:
     """Initialize Molecule
 
@@ -79,7 +31,6 @@ class InitMolecule:
             NOTE: in a.u.
         self.pes_cartesian: the PES function that accept
             SINGLE config cartesian coordinates and return the SINGLE energy
-            NOTE: for CH5+Jacobi this func recieve the Jacobi coors (rectilinear)
                 signature:
                     cartesian_coors: (dim * num_of_atoms,) the flattened
                         mass weight cartesian displacement coordinates,
@@ -127,16 +78,6 @@ class InitMolecule:
         """
         select_potential = input_args.select_potential
         if molecule == "CH5+":
-            # select_potential = "J.Phys.Chem.A2021,125,5849-5859"  # NN-PES
-            # select_potential = "J.Phys.Chem.A2006,110,1569-1574"  # JBB Full PES
-            # select_potential = "External.J.Phys.Chem.A2006,110,1569-1574.Joblib"
-            #   # JBB Full PES
-            # select_potential = "PySCF.HF.pure"  # PySCF
-            # select_potential = "PySCF.HF.io"  # PySCF
-            # select_potential = "PySCF.MP2.pure"  # PySCF
-            # select_potential = "PySCF.CCSD.pure"  # PySCF
-            # select_potential = "PySCF.DFT.pure"  # PySCF
-            # select_potential = "External.PySCF.DFT.Joblib"  # PySCF Joblib Batched
             assert input_args.num_of_particles == 6
             mole_instance = CH5Plus(select_potential=select_potential)
             mole_instance.xalpha = x_alpha
@@ -146,22 +87,6 @@ class InitMolecule:
             self.equivariant_partitions: list = [1]
             # the molecule_obj used in MoleNetFlow
             self.molenet_molecule_obj: MoleculeBase = mole_instance
-        elif molecule == "CH5+NoCarbon":
-            assert input_args.num_of_particles == 5
-            mole_instance = CH5PlusNoCarbon(select_potential=select_potential)
-            mole_instance.xalpha = x_alpha
-            w_indices = mole_instance.w_indices
-            potential_func_cartesian = mole_instance.pes_config_cartesian
-            # partitions in flow to be equivariant
-            self.equivariant_partitions: list = [0]
-            # the molecule_obj used in MoleNetFlow
-            self.molenet_molecule_obj: MoleculeBase = mole_instance
-        elif molecule == "CH5+Jacobi":
-            assert input_args.num_of_particles == 5
-            mole_instance = CH5PlusJacobi(select_potential=select_potential)
-            mole_instance.xalpha = x_alpha
-            w_indices = mole_instance.w_indices
-            potential_func_cartesian = mole_instance.pes
         elif molecule == "CH4":
             assert input_args.num_of_particles == 5
             mole_instance = CH4(select_potential=select_potential)
@@ -376,36 +301,6 @@ class InitMolecule:
                 "C": 1 / (_sigma_C**2 * self.particle_mass["C"]),
                 "H": 1 / (_sigma_H**2 * self.particle_mass["H"]),
             }
-        elif self.molecule == "CH5+NoCarbon":
-            # here sigma refers to the widening of wf
-            # in unit of a.u.
-            use_zpe = False
-            if use_zpe:
-                zpe = 10917.0 * cof
-                _omega_for_wf_basis = {
-                    "H": zpe / 6,
-                }
-            else:
-                _sigma_H = np.sqrt(1.00)
-                _omega_for_wf_basis = {
-                    "H": 1 / (_sigma_H**2 * self.particle_mass["H"]),
-                }
-        elif self.molecule == "CH5+Jacobi":
-            # here sigma refers to the widening of wf
-            # in unit of a.u.
-            width = 1.0
-            _sigma_1 = np.sqrt(width)
-            _sigma_2 = np.sqrt(width)
-            _sigma_3 = np.sqrt(width)
-            _sigma_4 = np.sqrt(width)
-            _sigma_5 = np.sqrt(width)
-            _omega_for_wf_basis = {
-                "R1": 1 / (_sigma_1**2 * self.particle_mass["R1"]),
-                "R2": 1 / (_sigma_2**2 * self.particle_mass["R2"]),
-                "R3": 1 / (_sigma_3**2 * self.particle_mass["R3"]),
-                "R4": 1 / (_sigma_4**2 * self.particle_mass["R4"]),
-                "R5": 1 / (_sigma_5**2 * self.particle_mass["R5"]),
-            }
         elif self.molecule == "CH4":
             _sigma_C = 0.5
             _sigma_H = 0.5
@@ -427,20 +322,6 @@ class InitMolecule:
             _omega_for_wf_basis = {
                 "C": 1 / (_sigma_C**2 * self.particle_mass["C"]),
                 "H": 1 / (_sigma_H**2 * self.particle_mass["H"]),
-            }
-        elif self.molecule == "CH5+Jacobi":
-            # width = 0.10
-            _sigma_1 = np.sqrt(0.1)
-            _sigma_2 = np.sqrt(0.08)
-            _sigma_3 = np.sqrt(0.07)
-            _sigma_4 = np.sqrt(0.06)
-            _sigma_5 = np.sqrt(0.01)
-            _omega_for_wf_basis = {
-                "R1": 1 / (_sigma_1**2 * self.particle_mass["R1"]),
-                "R2": 1 / (_sigma_2**2 * self.particle_mass["R2"]),
-                "R3": 1 / (_sigma_3**2 * self.particle_mass["R3"]),
-                "R4": 1 / (_sigma_4**2 * self.particle_mass["R4"]),
-                "R5": 1 / (_sigma_5**2 * self.particle_mass["R5"]),
             }
         elif self.molecule == "CH4":
             _sigma_C = 0.1
@@ -484,8 +365,6 @@ class InitMolecule:
             _pretrain_x0 = self.eq_config
             _pretrain_x0 = _pretrain_x0.reshape(6, 3)
             _pretrain_x0 = _pretrain_x0 * move_frac
-        elif self.molecule == "CH5+Jacobi":
-            _pretrain_x0 = self.mole_instance.c2v_config_in_jacobi
         elif self.molecule == "CH4":
             _pretrain_x0 = self.eq_config.reshape(5, 3)
         return _pretrain_x0

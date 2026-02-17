@@ -71,12 +71,11 @@ def set_args():
         "--molecule",
         type=str,
         default="CH5+",
-        choices=["CH5+", "CH5+NoCarbon", "CH5+Jacobi", "CH4"],
+        choices=["CH5+", "CH4"],
         help="molecule to compute, include toy models."
         "Note: the option User is for user specified potential files."
         "CH5+: the CH5+ molecule,"
-        "CH5+-NoCarbon: the CH5+ molecule without carbon atom(hence carbon,"
-        "is set to be origin of the coordinates)",
+        "CH4: the CH4 molecule.",
     )
     parser.add_argument(
         "--num_of_particles", type=int, default=3, help="total number of particles"
@@ -129,9 +128,8 @@ def set_args():
         type=str,
         default="MoleNet",
         choices=["MoleNet", "RNVP"],
-        help="The flow type. NOTE: FermiNetCH4 is specified for CH4."
-        "For other molecules, the equivariant flow should"
-        "be desinated as MoleNet",
+        help="The flow type. MoleNet is the equivariant flow."
+        " RNVP is the Real-valued Non-Volume-Preserving flow.",
     )
     parser.add_argument("--flow_depth", type=int, default=3, help="Flow depth")
     parser.add_argument(
@@ -145,24 +143,6 @@ def set_args():
         type=int,
         default=2,
         help="NAF/Real NVP: depth of the hidden layers",
-    )
-    parser.add_argument(
-        "--ferminet_spsize",
-        type=int,
-        default=128,
-        help="FermiNet single particle stream hidden units",
-    )
-    parser.add_argument(
-        "--ferminet_tpsize",
-        type=int,
-        default=16,
-        help="FermiNet two particle stream hidden units",
-    )
-    parser.add_argument(
-        "--ferminet_init_stddev",
-        type=float,
-        default=0.0001,
-        help="FermiNet init_stddev",
     )
     parser.add_argument(
         "--molenet_spsize",

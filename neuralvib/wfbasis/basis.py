@@ -13,7 +13,6 @@ from neuralvib.molecule.ch5plus.equilibrium_config import (
     equilibrium_bowman_jpca_2006_110_1569_1574,
     equilibrium_mccoy_jpca_2021_125_5849_5859,
 )
-from neuralvib.molecule.ch5plus.ch5_plus_jacobi import config2jacobi
 
 @partial(jax.custom_jvp, nondiff_argnums=(0,))
 def hermite(n: int, x: float) -> jax.Array:

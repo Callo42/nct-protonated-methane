@@ -12,18 +12,15 @@ import numpy as np
 import matplotlib.pyplot as plt
 import jax
 import jax.numpy as jnp
-import haiku as hk
 import optax
 from optax._src import base as optax_base
 
-from neuralvib.molecule.ch5plus.ch5_plus_jacobi import CH5PlusJacobi, config2jacobi
 from neuralvib.utils.update import clip_grad_norm
 from neuralvib.wfbasis.basis import log_gaussian_1d
 from neuralvib.wfbasis.basis import hermite
 from neuralvib.molecule.utils.init_molecule import InitMolecule
 from neuralvib.molecule.molecule_base import MoleculeBase
 from neuralvib.molecule.ch5plus.ch5_plus import CH5Plus
-from neuralvib.utils.convert import _convert_Hartree_to_inverse_cm
 
 plt.style.use("dark_background")
 plt.rcParams["figure.facecolor"] = "#222222"
@@ -374,108 +371,6 @@ class FlowPretrain:
                     molecule=self.molecule_init_obj.molecule,
                 )
 
-            # print("=" * 50)
-            # print("Computing Potentials After Permute")
-            # print("=" * 50)
-            # _pot = self.compute_potential(samples=samples_permuted)
-            # _pot = _convert_Hartree_to_inverse_cm(_pot)
-            # self._pot_after_permute = _pot
-            # print(f"Potential after permute = {_pot} cm-1")
-            # time.sleep(5)
-            # del _pot
-
-            print(
-                "......Computing Information Entropy of the target distribution......"
-            )
-            self.target_distr_infor_entropy = self._compute_target_entropy(
-                samples=samples,
-                logp_fn=_logp_fn,
-            )
-            print(f"Target distribution H(p) = {self.target_distr_infor_entropy}")
-            del target_wf_obj
-            del _logp_fn
-            del samples
-        elif self.molecule_init_obj.molecule == "CH5+Jacobi":
-            assert np.all(excitation_number == np.zeros(15, dtype=int))
-            assert isinstance(molecule_init_obj.mole_instance, CH5PlusJacobi)
-            print(
-                "***************************************************\n"
-                "***Pretraining the network w.r.t"
-                f" {self.molecule_init_obj.molecule}...*****\n"
-                "***NOTE that this pretrain only trains the network*\n"
-                "***with the ground state wavefunction and      ****\n"
-                "***minimizing the cross entropy between the    ****\n"
-                "***initialized GS wavefunction with the GS     ****\n"
-                "***wavefunction that is represented in normal  ****\n"
-                "***coordinates.                                ****\n"
-                "***************************************************\n"
-            )
-            batch = self.pretrain_batch
-
-            particles = self.molecule_init_obj.particles
-            mass = self.molecule_init_obj.particle_mass
-            omegas = self.molecule_init_obj.omega_for_pretrain
-
-            print(
-                f"mass={mass}\nomegas={omegas}\n"
-                # f"mass*omega={mass*omegas}\n"
-                # f"NormalizeFactor(sqrt(mass*omega/pi))={np.sqrt(mass*omegas/np.pi)}"
-            )
-            time.sleep(5)
-
-            x0 = self.molecule_init_obj.pretrain_x0
-            x0 = x0.reshape(5, 3)
-            print("=" * 50)
-            print("Sampling")
-            print(f"Target centered at \n {x0}")
-            print("=" * 50)
-            rng = np.random.default_rng()
-            hermite_func_sampler_obj = SampleHermiteFunc(
-                rng=rng,
-                particles=particles,
-                m=mass,
-                w=omegas,
-                x0=x0,
-                batch=batch,
-            )
-            self.hermite_func_sampler_obj = hermite_func_sampler_obj
-            self.sampler = hermite_func_sampler_obj.sampler
-            samples = self.sampler()
-
-            print("=" * 50)
-            print("Initializing Target WF")
-            print("=" * 50)
-            target_wf_obj = HermiteFunctionAtX0(
-                particles=particles,
-                m=mass,
-                w=omegas,
-                x0=x0,
-            )
-
-            def _logp_fn(xs: jax.Array | np.ndarray) -> jax.Array:
-                """Vmapped logP func for computing entropy
-                NOTE: Target function
-                Args:
-                    xs: (batch,num_of_particles,dim)
-                Returns:
-                    logps: (batch,) the logp for each batch
-                """
-                logps = jax.vmap(target_wf_obj.log_hermite_func, in_axes=(0, None))(
-                    xs, self.excitation_number
-                )
-                logps *= 2
-                return logps
-
-            if self.permute_hydrogens:
-                print("=" * 50)
-                print("Permuting Hydrogens")
-                print("=" * 50)
-                samples = self.permute_atoms(
-                    samples_at_one_eq=samples,
-                    molecule=self.molecule_init_obj.molecule,
-                    mole_instance=self.molecule_init_obj.mole_instance,
-                )
-
             print(
                 "......Computing Information Entropy of the target distribution......"
             )
@@ -527,10 +422,7 @@ class FlowPretrain:
         if self.molecule_init_obj.molecule == "test":
             logps = logp_fn(samples)
             target_entropy = -jnp.mean(logps)
-        if (
-            self.molecule_init_obj.molecule == "CH5+"
-            or self.molecule_init_obj.molecule == "CH5+Jacobi"
-        ):
+        if self.molecule_init_obj.molecule == "CH5+":
             if self.permute_hydrogens:
                 permuted_batchsize = len(samples)
                 if permuted_batchsize % 120 != 0:
@@ -595,37 +487,6 @@ class FlowPretrain:
                 batch_size * num_perms, particles, dims
             )
 
-        elif molecule == "CH5+Jacobi":
-            mole_instance = kwargs.get("mole_instance", None)
-            jacobi2cart = jax.jit(
-                lambda x: mole_instance.convert_jacobi2jbb_cartesian_input_xn(x).T
-            )
-            permute_index = [1, 2, 3, 4, 5]
-            hydrogen_all_permute = jnp.array(list(permutations(permute_index)))
-            carbon_index = jnp.zeros((len(hydrogen_all_permute), 1), dtype=np.int32)
-            all_permute = jnp.concatenate((carbon_index, hydrogen_all_permute), axis=-1)
-
-            @jax.jit
-            def permute_single_config(single_config_jacobi):
-                """Permutes a single jacobi configuration."""
-                single_config_cart = jacobi2cart(single_config_jacobi)
-                # vmap over permutations
-                permuted_cartesians = jax.vmap(lambda p, x: x[p], in_axes=(0, None))(
-                    all_permute, single_config_cart
-                )
-                # vmap over permuted cartesians
-                permuted_jacobis = jax.vmap(config2jacobi)(permuted_cartesians)
-                return permuted_jacobis
-
-            # vmap over the batch of samples
-            samples_permuted_batched = jax.vmap(permute_single_config)(
-                samples_at_one_eq
-            )
-            # reshape to (batch*120, 5, 3)
-            batch_size, num_perms, particles, dims = samples_permuted_batched.shape
-            samples_permuted = samples_permuted_batched.reshape(
-                batch_size * num_perms, particles, dims
-            )
         else:
             raise NotImplementedError(f"Permute atoms for {molecule} not implemented!")
         return jnp.array(samples_permuted)
@@ -776,8 +637,6 @@ class FlowPretrain:
             init_lr = 2e-2
         elif self.molecule_init_obj.molecule == "CH5+":
             init_lr = 1e-5
-        elif self.molecule_init_obj.molecule == "CH5+Jacobi":
-            init_lr = 1e-3
 
         optimizer = optax.adam(init_lr)
         opt_state = optimizer.init(init_params)
@@ -878,51 +737,6 @@ class FlowPretrain:
 
                 del grad
                 del updates
-        elif self.molecule_init_obj.molecule == "CH5+Jacobi":
-            for i in range(self.iterations):
-                samples = self.sampler()
-                if self.permute_hydrogens:
-                    samples = self.permute_atoms(
-                        samples_at_one_eq=samples,
-                        molecule="CH5+Jacobi",
-                        mole_instance=self.molecule_init_obj.mole_instance,
-                    )
-
-                num_of_device = jax.device_count()
-                num_samples = len(samples)
-                num_of_particles = samples.shape[1]
-                dim = samples.shape[2]
-                assert num_samples % num_of_device == 0
-                samples = samples.reshape(
-                    (num_of_device, num_samples // num_of_device, num_of_particles, dim)
-                )
-
-                loss_i = _pmapped_loss(params, samples)
-                print(
-                    f"Epoch: {i:06}, Loss={loss_i:.5f}",
-                    f"Target={self.target_distr_infor_entropy:.5f}",
-                    flush=True,
-                )
-                epoch_list.append(i)
-                loss_list.append(loss_i)
-
-                # if abs(loss_i - self.target_distr_infor_entropy) <= self.tolerance:
-                #     convergence_count += 1
-                # else:
-                #     convergence_count = 0
-
-                del loss_i
-
-                grad = jax.grad(_pmapped_loss, argnums=0)(params, samples)
-                grad = clip_grad_norm(grad, 1.0)
-                updates, opt_state = optimizer.update(grad, opt_state, params)
-                params = optax.apply_updates(params, updates)
-
-                # if convergence_count >= converge_criteria:
-                # break
-
-                del grad
-                del updates
         else:
             raise NotImplementedError(
                 f"Pretraining of {self.molecule_init_obj.molecule} not implemented!"
@@ -943,83 +757,3 @@ class FlowPretrain:
         return pretrained_params
 
 
-def previous_network_pretrain(
-    key: jax.Array,
-    flow: hk.Transformed,
-    x_init: jax.Array,
-    z_target: jax.Array,
-    iterations: int,
-    tolerance: float = 1e-6,
-) -> optax_base.Params:
-    """Pretrain the network
-    NOTE: a specific implementation that pretrain the normalizing flow
-        such that the transformed coordinates z_transed from x_init:
-        z_transed = flow(x_init)
-        is equal to z_target.
-    NOTE that z is the coordinates in latent space and x is the real
-        configuration space.
-
-    Args:
-        key: the PRNGKey.
-        flow: the flow model which is transformed into pure function
-            by haiku.
-        x_init: (...) the initial coordinates in configuration space
-            from which the main training programm would start from
-            (typically where the MCMC starts from.)
-        z_target: (...) have the same shape as x_init
-            the target coordinates that one would like the network to
-            link with x_init. After pretrain, we would obtain a network
-            that would transform x_init into z_target.
-        iterations: the attempt iterations for pretrain. If after
-            iterations times of pretrain and tolerance is not reached,
-            raise error.
-        tolerance: the tolerance of convergence.
-            NOTE: the criteria of convergence is 100 times of hitting the
-                tolerance.
-
-    Returns:
-        pretrained_params: the network parameters after pretrain. Using this
-            parameter directly draws result that flow(x_init) = z_target.
-    """
-    converge_criteria = 10
-
-    def _loss(params: optax_base.Params) -> jax.Array:
-        """Loss function"""
-        z_transed = flow.apply(params, None, x_init)
-        return jnp.linalg.norm(z_transed - z_target)
-
-    key, subkey = jax.random.split(key)
-
-    init_params = flow.init(subkey, x_init)
-
-    init_lr = 2e-2
-    optimizer = optax.adam(init_lr)
-    opt_state = optimizer.init(init_params)
-    params = init_params
-
-    convergence_count = 0
-    for i in range(iterations):
-        loss_i = _loss(params)
-        print(f"Epoch: {i:06}, Loss={loss_i:.5f}")
-
-        if loss_i <= tolerance:
-            convergence_count += 1
-        else:
-            convergence_count = 0
-
-        if convergence_count >= converge_criteria:
-            break
-
-        grad = jax.grad(_loss)(params)
-        updates, opt_state = optimizer.update(grad, opt_state, params)
-        params = optax.apply_updates(params, updates)
-
-    if convergence_count < converge_criteria:
-        raise TimeoutError(
-            f"Convergence failed to reach with tolerance={tolerance}"
-            f" within iterations={iterations} by hitting tolerance "
-            f"{converge_criteria} times contineously."
-        )
-
-    pretrained_params = params
-    return pretrained_params

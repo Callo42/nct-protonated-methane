@@ -10,7 +10,6 @@ import jax
 import jax.numpy as jnp
 from optax._src import base as optax_base
 
-from neuralvib.utils.mcmc import mcmc_pmap_ebes
 from neuralvib.utils.mcmc import mcmc_pmap
 
 
@@ -181,22 +180,6 @@ class Update:
                 pmove_in,
                 params,
             ) = val
-            # (
-            #     key,
-            #     xs_batched,
-            #     probability_batched,
-            #     mc_step_size,
-            #     pmove_per_orb,
-            # ) = mcmc_pmap_ebes(
-            #     self.mcmc_steps,
-            #     key,
-            #     xs_batched,
-            #     self.excitation_number,
-            #     params,
-            #     probability_batched,
-            #     mc_step_size,
-            #     self.log_wf_ansatz,
-            # )
             (
                 key,
                 xs_batched,
