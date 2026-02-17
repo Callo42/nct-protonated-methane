@@ -96,17 +96,18 @@ class MoleNetFlow(MoleNet):
 
     def _spstream0(self, x: jax.Array) -> jax.Array:
         """Init single particle features.
-        W.r.t center of mass (suppose at origin).
 
         Args:
             x: (num_of_atoms, dim) the cartesian coordinates.
         Returns:
             spstream:
         """
-        cm = jnp.array(0.0, dtype=jnp.float64)
-        delta_r = x - cm
+        # cm = jnp.array(0.0, dtype=jnp.float64)
+        # delta_r = x - cm
+        delta_r = x - 1e-6
         delta_r_norm = jnp.linalg.norm(delta_r, axis=1, keepdims=True)
         spstream = jnp.concatenate((delta_r_norm, delta_r), axis=-1)
+        # spstream = jnp.zeros_like(x)
         return spstream
 
     def __call__(self, x: jax.Array) -> jax.Array:
@@ -126,7 +127,7 @@ class MoleNetFlow(MoleNet):
         final = hk.Linear(
             dim,
             w_init=hk.initializers.RandomNormal(self.init_stddev),
-            # b_init=jnp.zeros,
+            b_init=jnp.zeros,
         )
         cartesian_coors = final(f) + x
         # cartesian_coors = final(f)

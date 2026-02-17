@@ -37,18 +37,49 @@ def _compute_ar(log_ratio, key_accept):
 def calculate_center_mass_coor(
     ms: jax.Array | np.ndarray, xs: jax.Array | np.ndarray
 ) -> jax.Array:
-    """Calculate the center of mass coordinate of a batch of particles.
+    """Calculate the center of mass coordinate.
 
     Args:
-        ms: (num_of_particles, 3) the mass of each particle.
-        xs: (num_of_particles, 3) the cartesian coordinates of each particle.
+        ms: masses for each particle. Accepted shapes:
+            - (num_of_particles,) one mass per particle
+            - (num_of_particles, 1) one mass per particle
+            - (num_of_particles, 3) masses repeated along Cartesian dims
+            - (3*num_of_particles,) flattened masses repeated along Cartesian dims
+        xs: (..., num_of_particles, 3) the Cartesian coordinates of each particle.
+            Leading batch dimensions are allowed.
 
     Returns:
-        com: (3,) the center of mass coordinate.
+        com: (..., 3) the center of mass coordinate.
     """
-    ms = jnp.array(ms)
-    xs = jnp.array(xs)
-    com = jnp.sum(xs * ms, axis=0) / jnp.sum(ms, axis=0)
+    ms = jnp.asarray(ms)
+    xs = jnp.asarray(xs)
+
+    n_particles = int(xs.shape[-2])
+    if ms.ndim == 1:
+        if ms.size == n_particles:
+            ms = ms[:, None]
+        elif ms.size == n_particles * xs.shape[-1]:
+            ms = ms.reshape((n_particles, xs.shape[-1]))
+        else:
+            raise ValueError(
+                f"Incompatible mass vector length {ms.size} for N={n_particles}."
+            )
+    elif ms.ndim == 2:
+        if ms.shape[0] != n_particles:
+            raise ValueError(
+                f"Incompatible mass shape {ms.shape} for N={n_particles}."
+            )
+        if ms.shape[1] == 1:
+            # Broadcast mass across Cartesian dimensions.
+            ms = jnp.repeat(ms, xs.shape[-1], axis=1)
+        elif ms.shape[1] != xs.shape[-1]:
+            raise ValueError(
+                f"Incompatible mass shape {ms.shape} for dim={xs.shape[-1]}."
+            )
+    else:
+        raise ValueError(f"Masses must be 1D or 2D, got shape {ms.shape}.")
+
+    com = jnp.sum(xs * ms, axis=-2) / jnp.sum(ms, axis=0)
     return com
 
 
@@ -245,6 +276,8 @@ class Metropolis:
         wf_ansatz: Callable[
             [optax_base.Params | dict, jax.Array, np.ndarray], jax.Array
         ],
+        ms: jax.Array | np.ndarray,
+        x_ref: jax.Array | np.ndarray | None = None,
         **kwargs,
     ) -> None:
         """Init
@@ -253,17 +286,103 @@ class Metropolis:
             signature: (params, x,)
         """
         self.wf_ansatz = wf_ansatz
-        particles = kwargs.get("particles", None)
-        masses = kwargs.get("particle_mass", None)
-        if particles is not None and masses is not None:
-            ms = []
-            for particle in particles:
-                ms.append([masses[particle]] * 3)
-            self.ms = np.array(ms)
-            self.move_factor = self.ms
-            print(f"Move factor: {self.move_factor},")
-        else:
-            self.move_factor = 1.0
+        if x_ref is None:
+            raise ValueError(
+                "To sample in a fixed Eckart gauge, you must pass `x_ref`."
+            )
+
+        x_ref_j = jnp.asarray(x_ref)
+        if x_ref_j.ndim == 1:
+            if x_ref_j.size % 3 != 0:
+                raise ValueError(f"x_ref is 1D with size {x_ref_j.size}, expected 3*N.")
+            x_ref_j = x_ref_j.reshape((x_ref_j.size // 3, 3))
+        if x_ref_j.ndim != 2 or x_ref_j.shape[1] != 3:
+            raise ValueError(f"x_ref must have shape (N,3); got {x_ref_j.shape}.")
+        n_particles = int(x_ref_j.shape[0])
+
+        self.ms = self._normalize_masses_1d(ms, n_particles)  # (N,)
+        self.move_factor = self.ms
+        self.sqrt_ms = jnp.sqrt(self.ms)[:, None]  # (N,1)
+
+        com_ref = calculate_center_mass_coor(self.ms, x_ref_j)  # (3,)
+        self.x_ref_centered = x_ref_j - com_ref  # (N,3)
+
+        self.U_rigid = self._build_rigid_body_basis(self.ms, self.x_ref_centered)  # (3N,k)
+        print(f"Move factor: {self.move_factor},")
+
+    @staticmethod
+    def _normalize_masses_1d(ms: jax.Array | np.ndarray, n_particles: int) -> jax.Array:
+        """Normalize masses to shape (N,) from common representations.
+
+        Accepted shapes:
+        - (N,) one mass per particle
+        - (N,1) one mass per particle
+        - (N,3) masses repeated along Cartesian dims
+        - (3N,) flattened masses repeated along Cartesian dims
+        """
+        ms_j = jnp.asarray(ms)
+        if ms_j.ndim == 1:
+            if ms_j.size == n_particles:
+                return ms_j
+            if ms_j.size == n_particles * 3:
+                return ms_j.reshape((n_particles, 3))[:, 0]
+            raise ValueError(
+                f"Incompatible 1D mass vector length {ms_j.size} for N={n_particles}."
+            )
+        if ms_j.ndim == 2:
+            if ms_j.shape == (n_particles, 3):
+                return ms_j[:, 0]
+            if ms_j.shape == (n_particles, 1):
+                return ms_j[:, 0]
+            raise ValueError(
+                f"Incompatible 2D mass shape {ms_j.shape} for N={n_particles}."
+            )
+        raise ValueError(f"Masses must be 1D or 2D, got shape {ms_j.shape}.")
+
+    @staticmethod
+    def _build_rigid_body_basis(ms: jax.Array, x_ref_centered: jax.Array) -> jax.Array:
+        """Return U with orthonormal columns spanning rigid translations + rotations.
+
+        The basis is defined in mass-weighted coordinates using the fixed reference
+        geometry `x_ref_centered`. It is robust to rank-deficient cases (e.g. linear
+        molecules) by truncating singular values below a tolerance.
+        """
+        ms_np = np.asarray(ms)
+        xref_np = np.asarray(x_ref_centered)
+        n_particles = ms_np.shape[0]
+        sqrtm = np.sqrt(ms_np)
+
+        cols: list[np.ndarray] = []
+
+        # Translations: deltaQ_i = sqrt(m_i) e_a
+        for a in range(3):
+            v = np.zeros((n_particles, 3), dtype=np.float64)
+            v[:, a] = sqrtm
+            cols.append(v.reshape(-1))
+
+        # Rotations about x,y,z: deltaQ_i = sqrt(m_i) (e_a × x_ref_i)
+        axes = np.eye(3, dtype=np.float64)
+        for a in range(3):
+            v = np.cross(axes[a], xref_np) * sqrtm[:, None]
+            cols.append(v.reshape(-1))
+
+        B = np.stack(cols, axis=1)  # (3N,6)
+
+        # Orthonormal basis for span(B), robust to linear molecules (rank < 6).
+        U, S, _ = np.linalg.svd(B, full_matrices=False)
+        tol = 1e-12 * (S[0] if S.size else 1.0)
+        keep = S > tol
+        U = U[:, keep]  # (3N,k) orthonormal
+
+        return jnp.asarray(U)
+
+    def _project_internal_deltaQ(self, deltaQ: jax.Array) -> jax.Array:
+        """Project mass-weighted displacement deltaQ (N,3) to internal subspace."""
+        dq = deltaQ.reshape(-1)  # (3N,)
+        U = self.U_rigid  # (3N,k)
+        coeff = U.T @ dq  # (k,)
+        dq_proj = dq - U @ coeff  # (3N,)
+        return dq_proj.reshape(deltaQ.shape)
 
     def oneshot_sample(
         self,
@@ -281,42 +400,48 @@ class Metropolis:
         """The one-step Metropolis update
 
         Args:
-            xs: (num_of_particles,dim) the configuration cartesian coordinate
+            xs: (num_of_particles, dim) the configuration Cartesian coordinates
                 of the particle(s).
-            excitation_number: (num_particles*dim,) the corresponding excitation
-                quantum number of each 1d-oscillator (of each 1d coordinate),
-                in the same order as that in coors(flattened).
-            probability:(1,) the probability in current particle coordinate
-                NOTE: this refers to log probability!
-            params: the flow parameter
-            step_size: (1,) the step size of each sample step. e.g.
-                xs_new = xs + step_size * jax.random.normal(subkey, shape=xs.shape)
-            key: the jax PRNG key.
+            excitation_number: (num_particles*dim,) excitation quantum numbers.
+            probability: (1,) current log probability log |psi|^2.
+            params: the wavefunction parameters.
+            step_size: (1,) step size of each sample step.
+            key: the JAX PRNG key.
 
         Returns:
-            xs_new: (num_of_particles,dim)the updated xs
-            probability_new: (1,)the updated probability
-            cond: (1,) the accept condition ,
+            xs_new: (num_of_particles, dim) updated coordinates
+            probability_new: (1,) updated log probability
+            cond: (1,) accept condition (True if accepted)
         """
         key, subkey = jax.random.split(key)
-        random_move = (
+
+        # Symmetric Gaussian in Cartesian coordinates, mass-scaled.
+        deltaR = (
             step_size
             * jax.random.normal(subkey, shape=xs.shape)
-            / jnp.sqrt(self.move_factor)
+            / jnp.sqrt(self.move_factor)[:, None]
         )
-        xs_new = xs + random_move
-        log_wf = self.wf_ansatz(params, xs_new, excitation_number)
-        # log probability = log |psi|^2 = 2 Re log |psi|
-        probability_new = 2 * log_wf.real
-        ratio = jnp.exp(probability_new - probability)
-        # Metropolis
+
+        # Convert to mass-weighted displacement, project out rigid modes, convert back.
+        deltaQ = self.sqrt_ms * deltaR
+        deltaQ = self._project_internal_deltaQ(deltaQ)
+        deltaR = deltaQ / self.sqrt_ms
+
+        xs_proposal = xs + deltaR
+
+        log_wf = self.wf_ansatz(params, xs_proposal, excitation_number)
+        # log probability = log |psi|^2 = 2 Re log psi
+        probability_new = 2.0 * log_wf.real
+
+        # Metropolis accept / reject (stable log-space test)
         key, subkey = jax.random.split(key)
-        cond = jax.random.uniform(subkey, shape=probability.shape) < ratio
+        logu = jnp.log(jax.random.uniform(subkey, shape=probability.shape))
+        cond = logu < (probability_new - probability)
 
-        probability_new = jnp.where(cond, probability_new, probability)
-        xs_new = jnp.where(cond, xs_new, xs)
+        probability_out = jnp.where(cond, probability_new, probability)
+        xs_new = jnp.where(cond[..., None, None], xs_proposal, xs)
 
-        return xs_new, probability_new, cond
+        return xs_new, probability_out, cond
 
 
 @partial(jax.jit, static_argnums=(1,))

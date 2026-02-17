@@ -24,7 +24,6 @@ from neuralvib.utils.update import naive_fori_loop
 from neuralvib.wfbasis.basis import HermiteFunction
 from neuralvib.wfbasis.wf_ansatze import WFAnsatz
 
-
 jax.config.update("jax_enable_x64", True)
 
 logger = logging.getLogger(__name__)
@@ -132,14 +131,13 @@ class Inference:
 
         Returns:
             energies: (num_orb,) the meaned energies of each orbital
-            energies_std: (num_orb,) the standard deviation of each orbital's
-                energies.
+            energies_error_bar: (num_orb,) the error bar of each orbital's energies.
             kinetics: (num_orb,) the meaned kinetic energies of each orbital.
-            kinetics_std:(num_orb,) the standard deviation of each orbital's
-                kinetic energies.
+            kinetics_error_bar: (num_orb,) the error bar of each orbital's kinetic
+                energies.
             potentials: (num_orb,) the meaned potential energies of each orbital.
-            potentials_std: (num_orb,) the standard deviation of each orbital's
-                potential energies.
+            potentials_error_bar: (num_orb,) the error bar of each orbital's potential
+                energies.
         """
 
         def _acc_body_func(i, val):
@@ -250,26 +248,26 @@ class Inference:
         kinetics = jnp.mean(kinetics_batch, axis=0)
         potentials = jnp.mean(potentials_batch, axis=0)
 
-        energies_std = jnp.sqrt(
+        energies_error_bar = jnp.sqrt(
             ((energies_batch**2).mean(axis=0) - energies**2)
             / (self.acc_steps * self.batch_size)
         )
-        kinetics_std = jnp.sqrt(
+        kinetics_error_bar = jnp.sqrt(
             ((kinetics_batch**2).mean(axis=0) - kinetics**2)
             / (self.acc_steps * self.batch_size)
         )
-        potentials_std = jnp.sqrt(
+        potentials_error_bar = jnp.sqrt(
             ((potentials_batch**2).mean(axis=0) - potentials**2)
             / (self.acc_steps * self.batch_size)
         )
 
         return (
             energies,
-            energies_std,
+            energies_error_bar,
             kinetics,
-            kinetics_std,
+            kinetics_error_bar,
             potentials,
-            potentials_std,
+            potentials_error_bar,
         )
 
 
@@ -290,6 +288,19 @@ def main():
     key = ckptfile["key"]
     x = ckptfile["x"]
     params_flow = ckptfile["params_flow"]
+    boltzmann_weights = ckptfile.get("boltzmann_weights")
+
+    logger.info("========== Boltzmann Weights (From Checkpoint) ==========")
+    if boltzmann_weights is None:
+        logger.info("boltzmann_weights not found in checkpoint.")
+    else:
+        temperature = getattr(training_args, "boltzmann_weight_T", None)
+        if temperature is None:
+            logger.info("T not found in training_args.")
+        else:
+            logger.info(f"T={temperature} K")
+        logger.info(f"boltzmann_weights=\n{boltzmann_weights}")
+        logger.info("Note: weights are logged only and not used in inference.")
 
     logger.info("========== Checking Num_Of_Devices ==========")
     num_devices = jax.device_count()
@@ -317,6 +328,8 @@ def main():
     )
     # pes_func: (num_of_particles,dim,)->(1,)
     pes_cartesian = molecule_init_obj.pes_cartesian
+    mole_instance = molecule_init_obj.mole_instance
+    ms = mole_instance.ms
 
     logger.info("========== Initialize Excitation Number ==========")
     # Shape: (num_of_orb, num_of_particles * dim)
@@ -341,26 +354,21 @@ def main():
     logger.info(f"\tparameters in the flow model:{raveled_params_flow.size}")
 
     logger.info(
-        "================ Initializing coordinates as sigma=1 normal ============="
+        "================ Loading coordinates from checkpoint ============="
     )
-    # logger.info("================ Loading coordinates =============")
-    # x = x.reshape(
-    #     training_args.batch,
-    #     training_args.num_orb,
-    #     training_args.num_of_particles,
-    #     training_args.dim,
-    # )
-    key, subkey = jax.random.split(key)
-    x = 1.0 * jax.random.normal(
-        subkey,
-        shape=(
-            training_args.batch,
-            training_args.num_orb,
-            training_args.num_of_particles,
-            training_args.dim,
-        ),
+    x = jnp.asarray(x)
+    expected_shape = (
+        training_args.batch,
+        training_args.num_orb,
+        training_args.num_of_particles,
+        training_args.dim,
     )
-    logger.info(f"x.shape={x.shape}")
+    if x.shape != expected_shape:
+        raise ValueError(
+            "Checkpoint x has unexpected shape. "
+            f"Expected {expected_shape}, got {x.shape}."
+        )
+    logger.info(f"checkpoint x.shape={x.shape}, dtype={x.dtype}")
 
     logger.info("========== Initialize Wavefunction ==========")
     hermite_func_obj = HermiteFunction(
@@ -370,14 +378,16 @@ def main():
         flow=flow,
         log_phi_base=hermite_func_obj.log_phi_base,
         training_args=training_args,
+        ms=ms,
+        x_ref=mole_instance.equilibrium_config,
     )
     log_wf_ansatze = wf_ansatze_obj.log_wf_ansatz
 
     logger.info("========== Initialize Metropolis ==========")
     metropolis = Metropolis(
         wf_ansatz=log_wf_ansatze,
-        particles=molecule_init_obj.particles,
-        particle_mass=molecule_init_obj.particle_mass,
+        ms=ms,
+        x_ref=mole_instance.equilibrium_config,
     )
     metropolis_oneshot_sample = metropolis.oneshot_sample
     metropolis_sample_batched = jax.vmap(  # vmap on batch
@@ -488,7 +498,7 @@ def main():
     )
 
     logger.info("========== Running Inference ==========")
-    energies, energies_std, _, _, _, _ = inference_kernel.run(
+    energies, energies_error_bar, _, _, _, _ = inference_kernel.run(
         key=subkey,
         xs_batched=x,
         probability_batched=probability_batched,
@@ -496,17 +506,19 @@ def main():
         params=params_flow,
     )
     energies = np.array(energies * convert_hartree_to_cm_inv_coefficient)
-    energies_std = np.array(energies_std * convert_hartree_to_cm_inv_coefficient)
+    energies_error_bar = np.array(
+        energies_error_bar * convert_hartree_to_cm_inv_coefficient
+    )
 
     logger.info("========== Energies (Sorted) ==========")
     energies_sort_index = np.argsort(energies)
     energies_sorted = energies[energies_sort_index]
-    energies_std_sorted = energies_std[energies_sort_index]
+    energies_error_bar_sorted = energies_error_bar[energies_sort_index]
     energies_difference = energies_sorted - energies_sorted[0]  # relative energy
     logger.info(f"sorting index={energies_sort_index}")
     logger.info(f"energies_sorted=\n{energies_sorted}")
     logger.info(f"energies_difference=\n{energies_difference}")
-    logger.info(f"energies_std_sorted=\n{energies_std_sorted}")
+    logger.info(f"energies_error_bar_sorted=\n{energies_error_bar_sorted}")
 
 
 if __name__ == "__main__":

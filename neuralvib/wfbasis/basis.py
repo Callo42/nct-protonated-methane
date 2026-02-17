@@ -9,7 +9,11 @@ import jax
 import jax.numpy as jnp
 
 from neuralvib.molecule.utils.init_molecule import InitMolecule
-
+from neuralvib.molecule.ch5plus.equilibrium_config import (
+    equilibrium_bowman_jpca_2006_110_1569_1574,
+    equilibrium_mccoy_jpca_2021_125_5849_5859,
+)
+from neuralvib.molecule.ch5plus.ch5_plus_jacobi import config2jacobi
 
 @partial(jax.custom_jvp, nondiff_argnums=(0,))
 def hermite(n: int, x: float) -> jax.Array:
@@ -108,23 +112,65 @@ class HermiteFunction:
     def __init__(
         self,
         mole_init_obj: InitMolecule,
+        sphere_radius: float = 2.0,
     ) -> None:
         """Init
         Args:
-            particles: the tuple with atoms names, for example,
-                ("C","H","H","H","H","H")
-            m: the mass of the particle in a.u.
-                with key as the atom name and value as the mass
-            w: the frequency of each particle in a.u.
-                with key as the atom name and value as the frequency
-            x0: (num_particles*dim,) the flattened reference point
-                of wavefunc basis in latent space.
+            mole_init_obj: InitMolecule object with
+                - particles
+                - particle_mass
+                - omega_for_wf_basis
+            sphere_radius: radius of the sphere on which B-centers are placed.
+                (In the same units as coordinates.)
         """
         self.particles = mole_init_obj.particles
         self.m = mole_init_obj.particle_mass
         self.w = mole_init_obj.omega_for_wf_basis
-        self.x0 = np.zeros_like(mole_init_obj.eq_config.reshape(-1))
-        print("\nWavefunction basis reference: " f": {self.x0}")
+        # self.sphere_radius = float(sphere_radius)
+
+        # num_particles = len(self.particles)
+        # dim = 3  # still flattened as (num_particles*3,)
+
+        # # centers: (num_particles, 3)
+        # centers = np.zeros((num_particles, dim), dtype=float)
+
+        # # Particle 0 (A, e.g. carbon) at the origin
+        # centers[0] = np.array([0.0, 0.0, 0.0], dtype=float)
+
+        # # Remaining particles (B's) on a sphere
+        # if num_particles > 1:
+        #     sphere_points = self._fibonacci_sphere(num_particles - 1, self.sphere_radius)
+        #     centers[1:] = sphere_points  # assign to H's (or B's)
+
+        # # Flatten: (num_particles, 3) -> (num_particles*3,)
+        # self.x0 = centers.reshape(-1)
+
+        # print(f"Radius of sphere for Hermite centers: {self.sphere_radius}")
+        # print("\nWavefunction basis reference (x0):")
+        # print(self.x0)
+
+        self.x0 = mole_init_obj.eq_config
+        print("init using eq config")
+        print(self.x0)
+
+    @staticmethod
+    def _fibonacci_sphere(n_points: int, radius: float) -> np.ndarray:
+        """Approximate equal-area points on a sphere of given radius."""
+        if n_points == 1:
+            return np.array([[0.0, 0.0, radius]], dtype=float)
+
+        i = np.arange(n_points, dtype=float)
+        phi = (1.0 + np.sqrt(5.0)) / 2.0  # golden ratio
+
+        z = 1.0 - 2.0 * (i + 0.5) / n_points
+        r_xy = np.sqrt(np.maximum(0.0, 1.0 - z**2))
+        theta = 2.0 * np.pi * i / phi
+
+        x = r_xy * np.cos(theta)
+        y = r_xy * np.sin(theta)
+
+        pts = np.stack([x, y, z], axis=-1) * radius
+        return pts.astype(float)
 
     @property
     def log_phi_base(self) -> Callable:
@@ -164,10 +210,6 @@ class HermiteFunction:
             ws.append([self.w[particle]] * dim)
         ms = np.array(ms).reshape(-1)
         ws = np.array(ws).reshape(-1)
-
-        # print(
-        #     f"ms={ms}\nws={ws}\ncoors={coors}\nexcitation_number={excitation_number}"
-        # )
 
         phis = jax.vmap(log_wf_base_1d, in_axes=(0, 0, 0, 0, 0))(
             coors, self.x0, ms, ws, excitation_number

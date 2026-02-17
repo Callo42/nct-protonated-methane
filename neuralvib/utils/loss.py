@@ -27,6 +27,7 @@ class Loss:
         batched_local_energy_estimator: Callable,
         excitation_numbers: np.ndarray | jax.Array,
         clip_factor: float,
+        boltzmann_weights: np.ndarray | None = None,
     ) -> None:
         """Init
 
@@ -45,6 +46,8 @@ class Loss:
                 each 1d-oscillator (of each 1d coordinate),
                  in the same order as that in coors(flattened).
             clip_factor: the gradient clipping factor for energy part.
+            boltzmann_weights: (num_orb,), the boltzmann weights for each excitation state.
+                if not provided, use equal weights.
         """
         self.batch_local_energy = batched_local_energy_estimator
         self.excitation_numbers = excitation_numbers
@@ -54,6 +57,7 @@ class Loss:
             jax.vmap(log_wf, in_axes=(None, 0, 0)), in_axes=(None, 0, None), out_axes=0
         )
         self.clip_factor = clip_factor
+        self.boltzmann_weights = boltzmann_weights
 
     def total_energy(
         self, params: dict, batched_xs: jax.Array
@@ -121,7 +125,12 @@ class Loss:
             """Return shape (batch, num_orb)"""
             return self.batch_wf(params, batched_xs, self.excitation_numbers)
 
-        loss, energies, kinetics, potentials = self.total_energy(params, batched_xs)
+        _, energies, kinetics, potentials = self.total_energy(params, batched_xs)
+        if self.boltzmann_weights is not None:
+            energies *= self.boltzmann_weights
+            kinetics = kinetics * self.boltzmann_weights
+            potentials = potentials * self.boltzmann_weights
+        loss = jnp.mean(jnp.sum(energies, axis=-1))
         local_energies = jax.lax.stop_gradient(energies)
 
         def _custom_loss(params, batched_xs):

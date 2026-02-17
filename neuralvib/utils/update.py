@@ -83,6 +83,7 @@ class Update:
         batch_info: dict,
         metropolis_sampler_batched: Callable,
         training_args: Namespace,
+        boltzmann_weights: np.ndarray | None = None,
     ) -> None:
         self.mcmc_steps = mcmc_steps
         self.batch_size = batch_size
@@ -99,6 +100,13 @@ class Update:
         self.num_devices = batch_info["num_devices"]
         self.batch_per_device = batch_info["batch_per_device"]
         self.training_args = training_args
+        self.boltzmann_weights = (
+            jnp.asarray(boltzmann_weights)
+            if boltzmann_weights is not None
+            else None
+        )
+        # Placeholder for last iteration's per-level raw mean energies (Ha)
+        self.last_raw_levels_mean = None
 
     def update(
         self,
@@ -115,6 +123,7 @@ class Update:
         float,
         float,
         float,
+        jax.Array,
         jax.Array,
         jax.Array,
         optax_base.Params,
@@ -275,11 +284,22 @@ class Update:
             (loss, energies, kinetics, potentials, grad),
         )
         # energies, kinetics, potentials: (num_devices,batch_per_device, num_orb)
+        # Compute and store mean raw per-level energies before weighting (if weighted)
+        if self.boltzmann_weights is not None:
+            w = self.boltzmann_weights.reshape((1, 1, -1))
+            raw_per_level = jnp.where(w > 0, energies / w, 0.0)
+        else:
+            raw_per_level = energies
+        self.last_raw_levels_mean = jnp.mean(raw_per_level, axis=(0, 1))
+
         energies = jnp.sum(energies, axis=-1)
         kinetics = jnp.sum(kinetics, axis=-1)
         potentials = jnp.sum(potentials, axis=-1)
         kinetic = jnp.mean(kinetics)
         potential = jnp.mean(potentials)
+
+        # Mean raw per-level energies across devices and batch (pre-weighting)
+        raw_levels_mean = self.last_raw_levels_mean
 
         params, opt_state = update_params(self.optimizer, grad, opt_state, params)
         energy_std = jnp.sqrt(
@@ -307,6 +327,7 @@ class Update:
             kinetic_std,
             potential,
             potential_std,
+            raw_levels_mean,
             xs_batched,
             probability_batched,
             params,

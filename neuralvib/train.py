@@ -6,6 +6,7 @@ import subprocess
 import argparse
 import warnings
 from datetime import datetime
+import json
 
 import numpy as np
 import jax
@@ -20,19 +21,31 @@ from neuralvib.utils import convert
 from neuralvib.utils import ckeckpoint as ckpt_utils
 from neuralvib.utils.energy_estimator import EnergyEstimator
 from neuralvib.utils.initialize import init_batched_x
-from neuralvib.utils.key import key_batch_split
 from neuralvib.utils.loss import Loss
 
 from neuralvib.utils.mcmc import Metropolis, mcmc_pmap
-from neuralvib.utils.mcmc import mcmc_pmap_ebes
 from neuralvib.utils.update import Update
 from neuralvib.utils.network_pretrain import FlowPretrain
 
 # from neuralvib.wfbasis.basis import InvariantGaussian
 from neuralvib.wfbasis.basis import HermiteFunction
 from neuralvib.wfbasis.wf_ansatze import WFAnsatz
+from neuralvib.utils.boltzmann_fac import (
+    boltzmann_probabilities_au,
+    k_lowest_harmonic_levels_au,
+)
 
 jax.config.update("jax_enable_x64", True)
+
+
+def adjust_mcmc_step_size(
+    step_size, pmove_per_orb, upper_thr, lower_thr, inc_fac, dec_fac
+):
+    """Adjust MCMC Gaussian proposal step sizes based on per-orbital move acceptance."""
+    # pmove_per_orb: (num_orb,)
+    step_size = jnp.where(pmove_per_orb > upper_thr, step_size * inc_fac, step_size)
+    step_size = jnp.where(pmove_per_orb < lower_thr, step_size * dec_fac, step_size)
+    return step_size
 
 
 def set_args():
@@ -44,6 +57,7 @@ def set_args():
     # folder to save data.
     parser.add_argument(
         "--folder",
+        default="/data/ruisiwang/Vibration/",
         help="the folder to save data",
     )
 
@@ -57,7 +71,7 @@ def set_args():
         "--molecule",
         type=str,
         default="CH5+",
-        choices=["CH5+", "CH5+NoCarbon", "CH5+Jacobi"],
+        choices=["CH5+", "CH5+NoCarbon", "CH5+Jacobi", "CH4"],
         help="molecule to compute, include toy models."
         "Note: the option User is for user specified potential files."
         "CH5+: the CH5+ molecule,"
@@ -93,6 +107,16 @@ def set_args():
         default=1.0,
         help="the scaled_x scaling factor for training. Typically set to 1 is ok.",
     )
+    parser.add_argument(
+        "--init_ref_noise",
+        type=float,
+        default=1e-2,
+        help=(
+            "Stddev of Gaussian noise added to the equilibrium geometry before "
+            "fixing to the Eckart frame when initializing walkers (in a0). "
+            "Set to 0.0 for deterministic initialization."
+        ),
+    )
 
     parser.add_argument("--num_orb", type=int, default=1, help="number of orbitals")
     parser.add_argument(
@@ -103,7 +127,7 @@ def set_args():
     parser.add_argument(
         "--flow_type",
         type=str,
-        default="RNVP",
+        default="MoleNet",
         choices=["MoleNet", "RNVP"],
         help="The flow type. NOTE: FermiNetCH4 is specified for CH4."
         "For other molecules, the equivariant flow should"
@@ -244,7 +268,37 @@ def set_args():
         help="if designated, then self adjust the stepsize after MCMC update",
     )
     parser.add_argument(
+        "--mc_adjust_upper",
+        type=float,
+        default=0.65,
+        help="Acceptance upper threshold to increase step size",
+    )
+    parser.add_argument(
+        "--mc_adjust_lower",
+        type=float,
+        default=0.25,
+        help="Acceptance lower threshold to decrease step size",
+    )
+    parser.add_argument(
+        "--mc_adjust_increase_factor",
+        type=float,
+        default=1.05,
+        help="Multiplicative factor when acceptance > upper threshold",
+    )
+    parser.add_argument(
+        "--mc_adjust_decrease_factor",
+        type=float,
+        default=0.95,
+        help="Multiplicative factor when acceptance < lower threshold",
+    )
+    parser.add_argument(
         "--clip_factor", type=float, default=5.0, help="clip factor for gradient"
+    )
+    parser.add_argument(
+        "--boltzmann_weight_T",
+        type=float,
+        default=10000.0,
+        help="Boltzmann weight temperature (in K)",
     )
 
     parser.add_argument(
@@ -254,9 +308,10 @@ def set_args():
         "--excite_gen_type",
         type=int,
         required=True,
-        help="Excitation generation type: 1 or 2."
+        help="Excitation generation type: 1, 2, or 3."
         "corresponding to InitMolecule.generate_combinations"
-        "or InitMolecule.generate_combinations_2",
+        ", InitMolecule.generate_combinations_2, or energy-prioritized"
+        " InitMolecule.generate_combinations_3",
     )
 
     # ========== args.params -> params ==========
@@ -297,9 +352,20 @@ def training_kernel() -> None:
     )
     # pes_func: (num_of_particles,dim,)->(1,)
     pes_cartesian = molecule_init_obj.pes_cartesian
+    mole_instance = molecule_init_obj.mole_instance
+    w_indices = mole_instance.w_indices
+    levels_for_boltzmann = k_lowest_harmonic_levels_au(
+        w_indices, max_states=training_args.num_orb
+    )
+    boltzmann_factor = boltzmann_probabilities_au(
+        levels_for_boltzmann, temperature_K=training_args.boltzmann_weight_T
+    )
+    ms = mole_instance.ms
+    print(f"ms array:\n{ms}")
+    print(f"\nBoltzmann weights at T={training_args.boltzmann_weight_T} K:")
+    print(boltzmann_factor)
 
     print("\n========== Initialize Excitation Number ==========")
-    # excitation_number = np.zeros(18, dtype=int)
     # Shape: (num_of_orb, num_of_particles * dim)
     excitation_numbers = molecule_init_obj.excitation_numbers(
         num_of_orb=training_args.num_orb
@@ -334,28 +400,32 @@ def training_kernel() -> None:
         num_orb=training_args.num_orb,
         num_of_particles=training_args.num_of_particles,
         dim=training_args.dim,
+        init_ref_noise=training_args.init_ref_noise,
         molecule=training_args.molecule,
-        particles=molecule_init_obj.particles,
-        particle_mass=molecule_init_obj.particle_mass,
+        ms=ms,
+        x_ref=mole_instance.equilibrium_config,
     )
     print("x.shape:", x.shape)
 
     print("\n========== Initialize Wavefunction ==========")
     hermite_func_obj = HermiteFunction(
         molecule_init_obj,
+        sphere_radius=None,
     )
     wf_ansatze_obj = WFAnsatz(
         flow=flow,
         log_phi_base=hermite_func_obj.log_phi_base,
         training_args=training_args,
+        ms=ms,
+        x_ref=mole_instance.equilibrium_config,
     )
     log_wf_ansatze = wf_ansatze_obj.log_wf_ansatz
 
     print("\n========== Initialize Metropolis ==========")
     metropolis = Metropolis(
         wf_ansatz=log_wf_ansatze,
-        particles=molecule_init_obj.particles,
-        particle_mass=molecule_init_obj.particle_mass,
+        ms=ms,
+        x_ref=mole_instance.equilibrium_config,
     )
     metropolis_oneshot_sample = metropolis.oneshot_sample
     metropolis_sample_batched = jax.vmap(  # vmap on batch
@@ -376,21 +446,33 @@ def training_kernel() -> None:
     )
 
     print("\n========== Initialize optimizer ==========")
-    scheduler = optax.exponential_decay(
-        init_value=training_args.adam_lr, transition_steps=1000, decay_rate=0.99
+    pct_start = 0.3
+    div_fac = 25
+    final_div_fac = 1e4
+    scheduler = optax.cosine_onecycle_schedule(
+        transition_steps=training_args.epoch,
+        peak_value=training_args.adam_lr,
+        pct_start=pct_start,
+        div_factor=div_fac,
+        final_div_factor=final_div_fac,
     )
-    # scheduler = optax.constant_schedule(training_args.adam_lr)
+    print(
+        f"LR scheduler: OneCycle (cosine_onecycle_schedule)\n"
+        f"    peak_value      = {training_args.adam_lr}\n"
+        f"    pct_start      = {pct_start}\n"
+        f"    div_factor      = {div_fac}\n"
+        f"    final_div_factor      = {final_div_fac}\n"
+    )
     if training_args.optimizer == "adam":
         optimizer = optax.adam(learning_rate=scheduler)
         print(f"Optimizer adam:\n    learning rate: {training_args.adam_lr}")
-    elif training_args.optimizer == "adamw":
-        optimizer = optax.adamw(
-            learning_rate=training_args.adam_lr,
-            weight_decay=training_args.adamw_weight_decay,
-            nesterov=True,
-        )
-        print(f"Optimizer adam:\n    learning rate: {training_args.adam_lr}")
-        print(f"\tweight_decay={training_args.adamw_weight_decay}")
+    else:
+        raise ValueError(
+        f"Unsupported optimizer '{training_args.optimizer}'. "
+        "This implementation is only validated with Adam; "
+        "using other optimizers may lead to unstable or incorrect training. "
+        "Please switch to 'adam' or update the training code to handle other optimizers explicitly."
+    )
 
     print("\n========== Checking Num_Of_Devices ==========")
     num_devices = jax.device_count()
@@ -403,6 +485,7 @@ def training_kernel() -> None:
 
     print("\n========== Check point ==========")
     if training_args.epoch_finished != 0:  # try to load from ckptfile
+        raise NotImplementedError("Loading from checkpoint is not rechecked yet.")
         if training_args.pretrain_network:
             raise ValueError(
                 "pretrain_network is not supported when starting from ckpt."
@@ -455,16 +538,6 @@ def training_kernel() -> None:
                 batch_per_device,
                 training_args.num_orb,
             )
-            # key, x, probability_batched, step_size, pmove_per_orb = mcmc_pmap_ebes(
-            #     training_args.mc_steps,
-            #     subkey,
-            #     x,
-            #     excitation_number,
-            #     params_flow,
-            #     probability_batched,
-            #     step_size,
-            #     log_wf_ansatze,
-            # )
             key, x, probability_batched, step_size, pmove_per_orb = mcmc_pmap(
                 training_args.mc_steps,
                 subkey,
@@ -484,8 +557,14 @@ def training_kernel() -> None:
             subkey = jax.random.split(key[0], num_devices)
             if training_args.mc_selfadjust_stepsize:
                 print("Self adjust step size after each mc step ")
-                step_size = jnp.where(pmove_per_orb > 0.65, step_size * 1.05, step_size)
-                step_size = jnp.where(pmove_per_orb < 0.25, step_size * 0.95, step_size)
+                step_size = adjust_mcmc_step_size(
+                    step_size,
+                    pmove_per_orb,
+                    training_args.mc_adjust_upper,
+                    training_args.mc_adjust_lower,
+                    training_args.mc_adjust_increase_factor,
+                    training_args.mc_adjust_decrease_factor,
+                )
         x = x.reshape(
             training_args.batch,
             training_args.num_orb,
@@ -543,6 +622,9 @@ def training_kernel() -> None:
             print(f"#create path: {path}")
 
         if training_args.pretrain_network:
+            raise ValueError(
+                "Since we obtained good behaviour under CoM, Pretrain is disabled by default."
+            )
             print("\n========== Pretraining flow model ==========")
             print(f"Pretrain batch size: {training_args.pretrain_batch}")
             print(f"Pretrain epochs: {training_args.pretrain_epochs}")
@@ -569,27 +651,6 @@ def training_kernel() -> None:
 
         print("\n========== Thermalize ==========")
         step_size = training_args.mc_stddev * np.ones(training_args.num_orb)
-        # if training_args.pretrain_network:
-        #     raise NotImplementedError(
-        #         "This part to use pretrain wf to initialize x"
-        #         " is not implemented for multi-orbital calculation."
-        #     )
-        #     print("Using pretrain wf to initialize x, the former x is discarded.")
-        #     hermite_smp_obj = flow_pretain_obj.hermite_func_sampler_obj
-        #     hermite_smp_obj.batch = training_args.batch
-        #     hermite_smp_obj.batch = training_args.batch // 120
-        #     x = hermite_smp_obj.sampler()
-        #     x = flow_pretain_obj.permute_atoms(x, molecule_init_obj.molecule)
-        #     probability_batched = (
-        #         jax.vmap(log_wf_ansatze, in_axes=(None, 0, None))(
-        #             params_flow, x, excitation_numbers
-        #         )
-        #         * 2
-        #     )
-        #     del flow_pretain_obj
-        #     del hermite_smp_obj
-        #     # key = jax.random.split(key, num_devices)
-        # else:
         probability_batched = (
             jax.vmap(
                 jax.vmap(log_wf_ansatze, in_axes=(None, 0, 0)),
@@ -613,16 +674,6 @@ def training_kernel() -> None:
                 batch_per_device,
                 training_args.num_orb,
             )
-            # key, x, probability_batched, step_size, pmove_per_orb = mcmc_pmap_ebes(
-            #     training_args.mc_steps,
-            #     subkey,
-            #     x,
-            #     excitation_number,
-            #     params_flow,
-            #     probability_batched,
-            #     step_size,
-            #     log_wf_ansatze,
-            # )
             key, x, probability_batched, step_size, pmove_per_orb = mcmc_pmap(
                 training_args.mc_steps,
                 subkey,
@@ -641,8 +692,14 @@ def training_kernel() -> None:
             )
             if training_args.mc_selfadjust_stepsize:
                 print("Self adjust step size after each mc step ")
-                step_size = jnp.where(pmove_per_orb > 0.65, step_size * 1.05, step_size)
-                step_size = jnp.where(pmove_per_orb < 0.25, step_size * 0.95, step_size)
+                step_size = adjust_mcmc_step_size(
+                    step_size,
+                    pmove_per_orb,
+                    training_args.mc_adjust_upper,
+                    training_args.mc_adjust_lower,
+                    training_args.mc_adjust_increase_factor,
+                    training_args.mc_adjust_decrease_factor,
+                )
             subkey = jax.random.split(key[0], num_devices)
         x = x.reshape(
             training_args.batch,
@@ -654,7 +711,10 @@ def training_kernel() -> None:
             training_args.batch, training_args.num_orb
         )
 
-    key = key[0]
+    # If `key` is sharded across devices (shape: [num_devices, 2]),
+    # collapse back to a single host key; otherwise leave as-is.
+    if key.ndim > 1:
+        key = key[0]
 
     print("\n========== Initialize Loss Object ==========")
     x = x.reshape(
@@ -670,6 +730,7 @@ def training_kernel() -> None:
         batched_local_energy_estimator=energy_estimator.batched_local_energy,
         excitation_numbers=excitation_numbers,
         clip_factor=training_args.clip_factor,
+        boltzmann_weights=boltzmann_factor,
     )
     loss_and_grad = jax.pmap(
         loss_obj.loss_and_grad_pmap,
@@ -712,6 +773,7 @@ def training_kernel() -> None:
             "x": x,
             "opt_state": opt_state_ckpt,
             "params_flow": params_flow,
+            "boltzmann_weights": boltzmann_factor,
         }
         save_ckpt_filename = ckpt_utils.ckpt_filename(0, path)
         ckpt_utils.save_data(ckpt, save_ckpt_filename)
@@ -740,8 +802,21 @@ def training_kernel() -> None:
         metropolis_sampler_batched=metropolis_sample_batched,
         batch_info=batch_info,
         training_args=training_args,
+        boltzmann_weights=boltzmann_factor,
     )
     update_func = update_obj.update
+
+    # Save training_args to JSON in the same directory as data
+    try:
+        args_json_path = os.path.join(path, "training_args.json")
+        if not os.path.isfile(args_json_path):
+            with open(args_json_path, "w", encoding="utf-8") as jf:
+                json.dump(vars(training_args), jf, indent=2)
+            print(f"Saved training args: {args_json_path}")
+        else:
+            print(f"training_args.json already exists at: {args_json_path}")
+    except Exception as e:
+        warnings.warn(f"Failed to save training_args.json: {e}")
 
     print("\n========== Open Data File ==========")
     log_filename = os.path.join(path, "data.txt")
@@ -765,6 +840,7 @@ def training_kernel() -> None:
                 kinetic_energy_std,
                 potential_energy,
                 potential_energy_std,
+                raw_levels_mean,
                 x,
                 probability_batched,
                 params_flow,
@@ -795,13 +871,31 @@ def training_kernel() -> None:
             epoch_i_potential_std *= convert_hartree_to_cm_inv_coefficient
 
             t2 = time.time()
+            # Compute per-level energy differences to ground (min) in cm^-1
+            levels_cm = (
+                np.array(update_obj.last_raw_levels_mean)
+                * training_args.x_alpha
+                * convert_hartree_to_cm_inv_coefficient
+            )
+            levels_sorted_idx = np.argsort(levels_cm)
+            levels_sorted = levels_cm[levels_sorted_idx]
+            diffs_sorted = levels_sorted - levels_sorted[0]
+            levels_stream_str = ", ".join(
+                f"{idx}:{val:.1f}({diff:.1f})"
+                for idx, val, diff in zip(
+                    levels_sorted_idx.tolist(),
+                    levels_sorted.tolist(),
+                    diffs_sorted.tolist(),
+                )
+            )
             print(
                 f"Iter: {ii:05}",
                 f"\tLossE: {epoch_i_energy:.2f} ({epoch_i_energy_std:.2f})",
                 f"\tK: {epoch_i_kinetic:.2f} ({epoch_i_kinetic_std:.2f})",
                 f"\tV: {epoch_i_potential:.2f} ({epoch_i_potential_std:.2f})",
                 f"\t\tac(pmove)={pmove_per_orb}\tstepsize={step_size}"
-                f"\ttime= {(t2-t1):.2f}s",
+                f"\ttime= {(t2-t1):.2f}s"
+                f"\tlevels_sorted(idx:abs(diff) cm^-1): {levels_stream_str}",
                 flush=True,
             )
 
@@ -814,12 +908,22 @@ def training_kernel() -> None:
                 f.write(f"{single_p:.2f} ")
             for single_step_size in step_size:
                 f.write(f"{single_step_size:.2f} ")
-            f.write(f"{t2 - t1:.9f} " "\n")
+            # Append sorted level differences (cm^-1) to the end of the line
+            f.write(f"{t2 - t1:.9f} ")
+            for v in diffs_sorted.tolist():
+                f.write(f"{v:.1f} ")
+            f.write("\n")
             f.flush()
             if training_args.mc_selfadjust_stepsize:
                 # if ii % 1 == 0:
-                step_size = jnp.where(pmove_per_orb > 0.65, step_size * 1.05, step_size)
-                step_size = jnp.where(pmove_per_orb < 0.25, step_size * 0.95, step_size)
+                step_size = adjust_mcmc_step_size(
+                    step_size,
+                    pmove_per_orb,
+                    training_args.mc_adjust_upper,
+                    training_args.mc_adjust_lower,
+                    training_args.mc_adjust_increase_factor,
+                    training_args.mc_adjust_decrease_factor,
+                )
 
             if ii % training_args.ckpt_epochs == 0:
                 if training_args.optimizer == "adam":
@@ -832,6 +936,7 @@ def training_kernel() -> None:
                     "x": x,
                     "opt_state": opt_state_ckpt,
                     "params_flow": params_flow,
+                    "boltzmann_weights": boltzmann_factor,
                 }
                 save_ckpt_filename = ckpt_utils.ckpt_filename(ii, path)
                 ckpt_utils.save_data(ckpt, save_ckpt_filename)

@@ -775,7 +775,7 @@ class FlowPretrain:
         if self.molecule_init_obj.molecule == "test":
             init_lr = 2e-2
         elif self.molecule_init_obj.molecule == "CH5+":
-            init_lr = 1e-2
+            init_lr = 1e-5
         elif self.molecule_init_obj.molecule == "CH5+Jacobi":
             init_lr = 1e-3
 

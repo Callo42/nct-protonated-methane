@@ -17,7 +17,9 @@ from neuralvib.molecule.molecule_base import MoleculeBase
 from neuralvib.molecule.ch5plus.ch5_plus import CH5Plus
 from neuralvib.molecule.ch5plus.equilibrium_config import (
     equilibrium_bowman_jpca_2006_110_1569_1574,
+    equilibrium_mccoy_jpca_2021_125_5849_5859,
 )
+from neuralvib.molecule.ch4.molecule import CH4
 from neuralvib.utils.convert import (
     convert_hartree_to_inverse_cm,
     convert_inverse_cm_to_hartree,
@@ -160,6 +162,14 @@ class InitMolecule:
             mole_instance.xalpha = x_alpha
             w_indices = mole_instance.w_indices
             potential_func_cartesian = mole_instance.pes
+        elif molecule == "CH4":
+            assert input_args.num_of_particles == 5
+            mole_instance = CH4(select_potential=select_potential)
+            mole_instance.xalpha = x_alpha
+            w_indices = mole_instance.w_indices
+            potential_func_cartesian = mole_instance.pes_config_cartesian
+            self.equivariant_partitions: list = [1]
+            self.molenet_molecule_obj: MoleculeBase = mole_instance
         elif molecule == "User":
             # User specified potential
             raise NotImplementedError
@@ -360,8 +370,8 @@ class InitMolecule:
         if self.molecule == "CH5+":
             # here sigma refers to the widening of wf
             # in unit of a.u.
-            _sigma_C = np.sqrt(0.50)
-            _sigma_H = np.sqrt(1.0)
+            _sigma_C = 0.5
+            _sigma_H = 0.5
             _omega_for_wf_basis = {
                 "C": 1 / (_sigma_C**2 * self.particle_mass["C"]),
                 "H": 1 / (_sigma_H**2 * self.particle_mass["H"]),
@@ -396,6 +406,13 @@ class InitMolecule:
                 "R4": 1 / (_sigma_4**2 * self.particle_mass["R4"]),
                 "R5": 1 / (_sigma_5**2 * self.particle_mass["R5"]),
             }
+        elif self.molecule == "CH4":
+            _sigma_C = 0.5
+            _sigma_H = 0.5
+            _omega_for_wf_basis = {
+                "C": 1 / (_sigma_C**2 * self.particle_mass["C"]),
+                "H": 1 / (_sigma_H**2 * self.particle_mass["H"]),
+            }
         print(f"Omega for wf basis: {_omega_for_wf_basis}")
         return _omega_for_wf_basis
 
@@ -405,8 +422,8 @@ class InitMolecule:
         NOTE: This is for use of pretrain target WF
         """
         if self.molecule == "CH5+":
-            _sigma_C = np.sqrt(0.010 / 12)
-            _sigma_H = np.sqrt(0.01)
+            _sigma_C = 0.05
+            _sigma_H = 0.10
             _omega_for_wf_basis = {
                 "C": 1 / (_sigma_C**2 * self.particle_mass["C"]),
                 "H": 1 / (_sigma_H**2 * self.particle_mass["H"]),
@@ -424,6 +441,13 @@ class InitMolecule:
                 "R3": 1 / (_sigma_3**2 * self.particle_mass["R3"]),
                 "R4": 1 / (_sigma_4**2 * self.particle_mass["R4"]),
                 "R5": 1 / (_sigma_5**2 * self.particle_mass["R5"]),
+            }
+        elif self.molecule == "CH4":
+            _sigma_C = 0.1
+            _sigma_H = 0.1
+            _omega_for_wf_basis = {
+                "C": 1 / (_sigma_C**2 * self.particle_mass["C"]),
+                "H": 1 / (_sigma_H**2 * self.particle_mass["H"]),
             }
         else:
             raise NotImplementedError
@@ -457,11 +481,13 @@ class InitMolecule:
         """
         if self.molecule == "CH5+":
             move_frac = 1.0
-            _pretrain_x0 = saddle_c2v_bowman_jpca_2006_110_1569_1574()
+            _pretrain_x0 = self.eq_config
             _pretrain_x0 = _pretrain_x0.reshape(6, 3)
             _pretrain_x0 = _pretrain_x0 * move_frac
         elif self.molecule == "CH5+Jacobi":
             _pretrain_x0 = self.mole_instance.c2v_config_in_jacobi
+        elif self.molecule == "CH4":
+            _pretrain_x0 = self.eq_config.reshape(5, 3)
         return _pretrain_x0
 
     def excitation_numbers(self, num_of_orb: int) -> np.ndarray:
@@ -488,29 +514,11 @@ class InitMolecule:
                 f"Excitation generation type {self.excite_gen_type} not supported."
             )
         if self.molecule == "CH5+":
-            assert (
-                self.excite_gen_type == 3
-            ), "For CH5+ only excite_gen_type 3 is supported."
-            print(
-                """For CH5+ molecule, the excitation numbers are generated
-                using a specific version of generate_combinations_3 that
-                always treat carbon at [0, 0, 0].
-                """
-            )
-            _omegas = np.array([[self.omega_for_wf_basis["H"]] * 15]).flatten()
-            sequence = energy_priority_queue(num_of_orb, _omegas)
-            carbons = np.zeros((num_of_orb, 3), dtype=int)
-            excitation_numbers = np.array(sequence, dtype=int)
-            excitation_numbers = np.concatenate((carbons, excitation_numbers), axis=-1)
-            np.set_printoptions(threshold=np.inf)
-            print(f"Excitation numbers: {excitation_numbers}")
-            # Restore default print options (optional)
-            np.set_printoptions(threshold=1000)
-            self.duplication_check(excitation_numbers)
-            return excitation_numbers
-        elif self.molecule == "CH5+NoCarbon":
+            # assert (
+            #     self.excite_gen_type == 3
+            # ), "For CH5+ only excite_gen_type 3 is supported."
             n_rows = num_of_orb
-            n_cols = 15
+            n_cols = 18
             sequence = _ex_gen_fun(n_rows, n_cols)
             excitation_numbers = np.array(sequence, dtype=int)
             # Print the full array
@@ -520,15 +528,13 @@ class InitMolecule:
             np.set_printoptions(threshold=1000)
             self.duplication_check(excitation_numbers)
             return excitation_numbers
-        elif self.molecule == "CH5+Jacobi":
+        elif self.molecule == "CH4":
             n_rows = num_of_orb
-            n_cols = 15
+            n_cols = len(self.particles) * 3
             sequence = _ex_gen_fun(n_rows, n_cols)
             excitation_numbers = np.array(sequence, dtype=int)
-            # Print the full array
             np.set_printoptions(threshold=np.inf)
             print(f"Excitation numbers: {excitation_numbers}")
-            # Restore default print options (optional)
             np.set_printoptions(threshold=1000)
             self.duplication_check(excitation_numbers)
             return excitation_numbers

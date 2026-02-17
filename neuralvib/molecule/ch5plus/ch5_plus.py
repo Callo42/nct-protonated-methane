@@ -203,6 +203,19 @@ class CH5Plus(MoleculeBase):
         return _pes_origin_func
 
     @property
+    def ms(self) -> np.ndarray:
+        """Masses array for CH5+
+
+        Returns:
+            ms: (num_of_particles, dim) array of masses for each particle.
+        """
+        ms = []
+        for particle in self.particles:
+            ms.append([self.particle_mass[particle]] * 3)
+        ms = np.array(ms)
+        return ms
+
+    @property
     def equilibrium_config(self) -> np.ndarray:
         """Equilibrium configuration
 
@@ -227,10 +240,7 @@ class CH5Plus(MoleculeBase):
                 the same as in  J. Chem. Phys. 121, 4105-4116(2004),
                 Brown, McCoy, Braams, Jin and Bowman.
         """
-        ms = []
-        for particle in self.particles:
-            ms.append([self.particle_mass[particle]] * 3)
-        ms = np.array(ms)
+        ms = self.ms
 
         if self._select_potential == "J.Phys.Chem.A2021,125,5849-5859":
             _equilibrium_config = equilibrium_mccoy_jpca_2021_125_5849_5859()
@@ -253,8 +263,9 @@ class CH5Plus(MoleculeBase):
             or self._select_potential == "External.PySCF.CCSD.Joblib"
         ):
             _equilibrium_config = equilibrium_bowman_jpca_2006_110_1569_1574()
-        # _equilibrium_config = jax.lax.stop_gradient(_equilibrium_config)
-        # _equilibrium_config = np.zeros_like(_equilibrium_config)
+        com = calculate_center_mass_coor(ms, _equilibrium_config.reshape(-1, 3))
+        _equilibrium_config = _equilibrium_config.reshape(-1, 3) - com
+        _equilibrium_config = _equilibrium_config.reshape(-1)
         return _equilibrium_config
 
     @property
@@ -288,38 +299,6 @@ class CH5Plus(MoleculeBase):
                 )
         """
 
-        # mass_c = 12 * 1822.89
-        # mass_h_1 = 1.0079 * 1822.89
-        # mass_h_2 = 1.0079 * 1822.89
-        # mass_h_3 = 1.0079 * 1822.89
-        # mass_h_4 = 1.0079 * 1822.89
-        # mass_h_5 = 1.0079 * 1822.89
-
-        # _sqrt_atom_masses = np.sqrt(
-        #     np.array(
-        #         [
-        #             mass_c,
-        #             mass_c,
-        #             mass_c,
-        #             mass_h_1,
-        #             mass_h_1,
-        #             mass_h_1,
-        #             mass_h_2,
-        #             mass_h_2,
-        #             mass_h_2,
-        #             mass_h_3,
-        #             mass_h_3,
-        #             mass_h_3,
-        #             mass_h_4,
-        #             mass_h_4,
-        #             mass_h_4,
-        #             mass_h_5,
-        #             mass_h_5,
-        #             mass_h_5,
-        #         ]
-        #     )
-        # )
-        # return _sqrt_atom_masses
 
     @property
     def _arg_sort_index(self) -> np.ndarray:
