@@ -274,12 +274,15 @@ class Inference:
 def main():
     """The main function for getting energy"""
     print("jax.__version__:", jax.__version__)
-    print(
-        subprocess.run(
-            ["nvidia-smi"], stdout=subprocess.PIPE, text=True, check=True
-        ).stdout,
-        flush=True,
-    )
+    try:
+        print(
+            subprocess.run(
+                ["nvidia-smi"], stdout=subprocess.PIPE, text=True, check=True
+            ).stdout,
+            flush=True,
+        )
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        print("nvidia-smi not available; running on CPU.", flush=True)
 
     args = _set_args()
     logger.info(f"Loading file: {args.file_name}")

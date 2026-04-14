@@ -57,7 +57,7 @@ def set_args():
     # folder to save data.
     parser.add_argument(
         "--folder",
-        default="/data/ruisiwang/Vibration/",
+        default="./data/",
         help="the folder to save data",
     )
 
@@ -303,15 +303,18 @@ def training_kernel() -> None:
     """Training Kernel"""
     # Get the current date and time
     now = datetime.now()
-    formatted_datetime = now.strftime("%Y-%m-%d/%H:%M:%S")
+    formatted_datetime = now.strftime("%Y-%m-%d/%H-%M-%S")
 
     print("jax.__version__:", jax.__version__)
-    print(
-        subprocess.run(
-            ["nvidia-smi"], stdout=subprocess.PIPE, text=True, check=True
-        ).stdout,
-        flush=True,
-    )
+    try:
+        print(
+            subprocess.run(
+                ["nvidia-smi"], stdout=subprocess.PIPE, text=True, check=True
+            ).stdout,
+            flush=True,
+        )
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        print("nvidia-smi not available; running on CPU.", flush=True)
 
     training_args = set_args()
     network_config = setting_network(input_args=training_args)
