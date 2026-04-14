@@ -5,7 +5,6 @@ import time
 import subprocess
 import argparse
 import warnings
-from datetime import datetime
 import json
 
 import numpy as np
@@ -46,6 +45,13 @@ def adjust_mcmc_step_size(
     step_size = jnp.where(pmove_per_orb > upper_thr, step_size * inc_fac, step_size)
     step_size = jnp.where(pmove_per_orb < lower_thr, step_size * dec_fac, step_size)
     return step_size
+
+
+def save_dir_label(molecule: str) -> str:
+    """Return a short, filesystem-friendly folder label for saved runs."""
+    if molecule == "CH5+":
+        return "CH5"
+    return molecule.replace("+", "")
 
 
 def set_args():
@@ -301,10 +307,6 @@ def set_args():
 
 def training_kernel() -> None:
     """Training Kernel"""
-    # Get the current date and time
-    now = datetime.now()
-    formatted_datetime = now.strftime("%Y-%m-%d/%H-%M-%S")
-
     print("jax.__version__:", jax.__version__)
     try:
         print(
@@ -562,42 +564,13 @@ def training_kernel() -> None:
 
         print("\n========== Init Data Directory ==========")
         # ========== create file path ==========
-        molecule_str = training_args.molecule + (f"_n_{training_args.num_of_particles}")
-
-        flow_str = network_config["flow_string"]
-
-        if training_args.optimizer == "adam":
-            optimizer_str = f"_adam_lr_{training_args.adam_lr}"
-        elif training_args.optimizer == "adamw":
-            optimizer_str = (
-                f"_adamw_lr_{training_args.adam_lr}_"
-                f"wdcy_{training_args.adamw_weight_decay}"
-            )
-        else:
-            raise ValueError(f"Unknown optimizer: {training_args.optimizer}")
-
         path = training_args.folder
         if training_args.pretrain_network:
             path = os.path.join(
                 path,
                 f"PretrainBatch_{training_args.pretrain_batch}",
             )
-        path = os.path.join(
-            path,
-            (
-                molecule_str
-                + (f"_orb_{training_args.num_orb}")
-                + flow_str
-                + optimizer_str
-                + (f"_bth_{training_args.batch}_acc_{training_args.acc_steps}")
-                + (
-                    f"_mcthr_{training_args.mc_therm}_stp_{training_args.mc_steps}"
-                    f"_std_{training_args.mc_stddev}"
-                )
-                + (f"_clp_{training_args.clip_factor}")
-            ),
-        )
-        path = os.path.join(path, formatted_datetime)
+        path = os.path.join(path, save_dir_label(training_args.molecule))
 
         print("#file path:", path)
         if not os.path.isdir(path):
