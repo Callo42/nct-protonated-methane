@@ -6,8 +6,28 @@ import jax.numpy as jnp
 
 try:
     from neuralvib.molecule.ch5plus.JBB_Full_PES import JBBCH5ppotential
-except ImportError:
-    print("ImportError: JBBCH5ppotential not found. Please check the import path.")
+except ImportError as e:
+    raise ImportError(
+        "Failed to import the compiled JBB CH5+ PES extension "
+        "(JBBCH5ppotential).\n"
+        "\n"
+        "This extension is built from Fortran sources on your machine; it is "
+        "not shipped prebuilt because it must match your Python version and "
+        "platform.\n"
+        "\n"
+        "To build it, from the repository root run:\n"
+        "    uv run make -C neuralvib/molecule/ch5plus/JBB_Full_PES\n"
+        "\n"
+        "Prerequisites:\n"
+        "  - A Fortran compiler on PATH (gfortran by default).\n"
+        "      Debian/Ubuntu: sudo apt install gfortran\n"
+        "      Fedora/RHEL:   sudo dnf install gcc-gfortran\n"
+        "      macOS:         brew install gcc\n"
+        "      Windows:       use WSL2, then follow the Linux instructions\n"
+        "  - `uv sync` already run so numpy is available in the project venv.\n"
+        "\n"
+        "See README.md (Install section) for the full setup."
+    ) from e
 
 jax.config.update("jax_enable_x64", True)
 

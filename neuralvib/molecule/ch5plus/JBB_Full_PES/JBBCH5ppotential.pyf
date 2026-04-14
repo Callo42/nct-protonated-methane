@@ -1,0 +1,130 @@
+!    -*- f90 -*-
+! Note: the context of this file is case sensitive.
+
+python module JBBCH5ppotential ! in 
+    interface  ! in :JBBCH5ppotential
+        subroutine calcangle(a,b,c,theta) ! in :JBBCH5ppotential:./neuralvib/molecule/ch5plus/JBB_Full_PES/ch5p.pes.sent/calcangle.f
+            double precision :: a
+            double precision :: b
+            double precision :: c
+            double precision :: theta
+        end subroutine calcangle
+        subroutine calcdist(x1,x2,dist) ! in :JBBCH5ppotential:./neuralvib/molecule/ch5plus/JBB_Full_PES/ch5p.pes.sent/calcdist.f
+            double precision dimension(3) :: x1
+            double precision dimension(3) :: x2
+            double precision :: dist
+        end subroutine calcdist
+        subroutine calcr(x,xch3,xh2a,dist,h2dist,theta) ! in :JBBCH5ppotential:./neuralvib/molecule/ch5plus/JBB_Full_PES/ch5p.pes.sent/calcr.f
+            double precision dimension(3,6) :: x
+            double precision dimension(4,3) :: xch3
+            double precision dimension(2,3) :: xh2a
+            double precision :: dist
+            double precision :: h2dist
+            double precision :: theta
+        end subroutine calcr
+        subroutine cspline(x,y0,y90,yq) ! in :JBBCH5ppotential:./neuralvib/molecule/ch5plus/JBB_Full_PES/ch5p.pes.sent/cspline.f
+            double precision :: x
+            double precision :: y0
+            double precision :: y90
+            double precision :: yq
+        end subroutine cspline
+        subroutine spline(x,y,n,yp1,ypn,y2) ! in :JBBCH5ppotential:./neuralvib/molecule/ch5plus/JBB_Full_PES/ch5p.pes.sent/cspline.f
+            double precision dimension(n) :: x
+            double precision dimension(n),depend(n) :: y
+            integer, optional,check(shape(x, 0) == n),depend(x) :: n=shape(x, 0)
+            double precision :: yp1
+            double precision :: ypn
+            double precision dimension(n),depend(n) :: y2
+        end subroutine spline
+        subroutine splint(xa,ya,y2a,n,x,y) ! in :JBBCH5ppotential:./neuralvib/molecule/ch5plus/JBB_Full_PES/ch5p.pes.sent/cspline.f
+            double precision dimension(n) :: xa
+            double precision dimension(n),depend(n) :: ya
+            double precision dimension(n),depend(n) :: y2a
+            integer, optional,check(shape(xa, 0) == n),depend(xa) :: n=shape(xa, 0)
+            double precision :: x
+            double precision :: y
+        end subroutine splint
+        subroutine getch3pot(xyz1,v) ! in :JBBCH5ppotential:./neuralvib/molecule/ch5plus/JBB_Full_PES/ch5p.pes.sent/getch3pot.f
+            double precision dimension(4,3) :: xyz1
+            double precision :: v
+        end subroutine getch3pot
+        subroutine getfit(xn,f0) ! in :JBBCH5ppotential:./neuralvib/molecule/ch5plus/JBB_Full_PES/ch5p.pes.sent/getfit.f
+            double precision dimension(3,6) :: xn
+            double precision :: f0
+        end subroutine getfit
+        subroutine getd0(xn,dc0,dc1,dw0,dw1,d0,r0) ! in :JBBCH5ppotential:./neuralvib/molecule/ch5plus/JBB_Full_PES/ch5p.pes.sent/getfit.f
+            double precision dimension(3,6) :: xn
+            double precision :: dc0
+            double precision :: dc1
+            double precision :: dw0
+            double precision :: dw1
+            double precision dimension(6,6) :: d0
+            double precision dimension(6,6) :: r0
+        end subroutine getd0
+        subroutine getvec(m,d,vec) ! in :JBBCH5ppotential:./neuralvib/molecule/ch5plus/JBB_Full_PES/ch5p.pes.sent/getfit.f
+            integer, optional,check(shape(vec, 0) == m),depend(vec) :: m=shape(vec, 0)
+            double precision dimension(6,6) :: d
+            double precision dimension(m) :: vec
+        end subroutine getvec
+        subroutine getrvec(m,r,vec) ! in :JBBCH5ppotential:./neuralvib/molecule/ch5plus/JBB_Full_PES/ch5p.pes.sent/getfit.f
+            integer, optional,check(shape(vec, 0) == m),depend(vec) :: m=shape(vec, 0)
+            double precision dimension(6,6) :: r
+            double precision dimension(m) :: vec
+        end subroutine getrvec
+        subroutine geth2pot(xyz1,v) ! in :JBBCH5ppotential:./neuralvib/molecule/ch5plus/JBB_Full_PES/ch5p.pes.sent/geth2pot.f
+            double precision dimension(2,3) :: xyz1
+            double precision :: v
+        end subroutine geth2pot
+        subroutine getlr(r,rh2,theta,elr) ! in :JBBCH5ppotential:./neuralvib/molecule/ch5plus/JBB_Full_PES/ch5p.pes.sent/getlr.f
+            double precision :: r
+            double precision :: rh2
+            double precision :: theta
+            double precision :: elr
+        end subroutine getlr
+        subroutine getpot(xn,epot) ! in :JBBCH5ppotential:./neuralvib/molecule/ch5plus/JBB_Full_PES/ch5p.pes.sent/getpot.f
+            double precision dimension(3,6) :: xn
+            double precision :: epot
+        end subroutine getpot
+        function sw(a,b,x) ! in :JBBCH5ppotential:./neuralvib/molecule/ch5plus/JBB_Full_PES/ch5p.pes.sent/getpot.f
+            double precision :: a
+            double precision :: b
+            double precision :: x
+            double precision :: sw
+        end function sw
+        function getpot_with_return(xn) ! in :JBBCH5ppotential:./neuralvib/molecule/ch5plus/JBB_Full_PES/ch5p.pes.sent/mygetpot.f
+            double precision dimension(3,6) :: xn
+            double precision :: getpot_with_return
+        end function getpot_with_return
+        function ch5ppot_func(r) ! in :JBBCH5ppotential:./neuralvib/molecule/ch5plus/JBB_Full_PES/ch5p.pes.sent/ch5ppot.dist6.bond.f90
+            real*8 dimension(12),intent(in) :: r
+            double precision :: ch5ppot_func
+        end function ch5ppot_func
+        subroutine polar2cart(r,cart) ! in :JBBCH5ppotential:./neuralvib/molecule/ch5plus/JBB_Full_PES/ch5p.pes.sent/ch5ppot.dist6.bond.f90
+            real*8 dimension(12),intent(in) :: r
+            real*8 dimension(3,5),intent(out) :: cart
+        end subroutine polar2cart
+        subroutine distance(natom,ndist,cart,dist) ! in :JBBCH5ppotential:./neuralvib/molecule/ch5plus/JBB_Full_PES/ch5p.pes.sent/ch5ppot.dist6.bond.f90
+            integer, optional,intent(in),check(shape(cart, 1) == natom),depend(cart) :: natom=shape(cart, 1)
+            integer intent(in) :: ndist
+            real*8 dimension(3,natom),intent(in) :: cart
+            real*8 dimension(ndist),intent(out),depend(ndist) :: dist
+        end subroutine distance
+        subroutine sort(n,x) ! in :JBBCH5ppotential:./neuralvib/molecule/ch5plus/JBB_Full_PES/ch5p.pes.sent/ch5ppot.dist6.bond.f90
+            integer, optional,check(shape(x, 0) == n),depend(x) :: n=shape(x, 0)
+            real*8 dimension(n),intent(inout) :: x
+        end subroutine sort
+        subroutine getpot_batch(xb,bsz,epots) ! in :JBBCH5ppotential:./neuralvib/molecule/ch5plus/JBB_Full_PES/ch5p.pes.sent/getpot_batch.f90
+            double precision dimension(3,6,bsz),intent(in) :: xb
+            integer, optional,intent(in),check(shape(xb, 2) == bsz),depend(xb) :: bsz=shape(xb, 2)
+            double precision dimension(bsz),intent(out),depend(bsz) :: epots
+        end subroutine getpot_batch
+        function ch5ppot_func_cart(cartr) ! in :JBBCH5ppotential:./neuralvib/molecule/ch5plus/JBB_Full_PES/ch5p.pes.sent/mych5ppot.dist6.bond.f90
+            real*8 dimension(3,5) :: cartr
+            double precision :: ch5ppot_func_cart
+        end function ch5ppot_func_cart
+    end interface 
+end python module JBBCH5ppotential
+
+! This file was auto-generated with f2py (version:2.3.2).
+! See:
+! https://web.archive.org/web/20140822061353/http://cens.ioc.ee/projects/f2py2e

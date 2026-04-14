@@ -1,0 +1,18 @@
+1) compile 
+ make -f ch5p.mak
+2) run
+ ch5p.x
+you should get the following two test points.
+
+******Call the potential using polar coordinates******
+Bond equilibrium
+     2.09459     2.05676     2.26113     2.26260     2.05676
+     109.248     119.433      97.451     116.374
+     126.722     229.665     274.835
+               ener=       0.000
+
+C2v local minimum
+     2.15785     2.05472     2.05472     2.15785     2.19719
+      61.566     118.973     118.973      61.566
+      90.000     270.000     180.000
+               ener=     340.759

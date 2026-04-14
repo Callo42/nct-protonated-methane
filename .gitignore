@@ -7,3 +7,12 @@ __pycache__/
 # vscode
 .vscode
 
+# uv / venv
+.venv/
+
+# compiled Fortran extension and module files (built locally via `make`)
+*.so
+*.mod
+
+# default training output directory
+data/
