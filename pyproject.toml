@@ -1,0 +1,37 @@
+[project]
+name = "nct-protonated-methane"
+version = "0.1.0"
+description = "Neural Canonical Transformation calculation of vibrational energy levels of protonated methane (CH5+)"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.11,<3.14"
+dependencies = [
+    "numpy>=2.0,<3",
+    "scipy>=1.13",
+    "jax==0.7.0",
+    "jaxlib==0.7.0",
+    "optax==0.2.5",
+    "dm-haiku==0.0.14",
+    "flax==0.11.1",
+    "orbax-checkpoint==0.11.21",
+    "chex>=0.1.90",
+    "joblib>=1.5",
+    "pyscf==2.10.0",
+    "matplotlib>=3.8",
+    # Required by `numpy.f2py -c` to build the JBB Fortran extension on
+    # Python>=3.12 (distutils backend is removed; meson+ninja is the default).
+    "meson>=1.5",
+    "ninja>=1.11",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["neuralvib"]
