@@ -81,6 +81,36 @@ uv run python -m neuralvib.train \
     --excite_gen_type 3
 ```
 
+Excited-state training (CH5+, JBB PES, RNVP flow) writing checkpoints under
+`./data_excited/`:
+
+```bash
+uv run python -m neuralvib.train \
+    --folder ./data_excited/ \
+    --molecule "CH5+" \
+    --select_potential "J.Phys.Chem.A2006,110,1569-1574" \
+    --num_of_particles 6 \
+    --num_orb 32 \
+    --flow_type RNVP \
+    --flow_depth 16 \
+    --mlp_width 32 \
+    --mlp_depth 2 \
+    --batch 1200 \
+    --acc_steps 1 \
+    --epoch 10000 \
+    --clip_factor 5.0 \
+    --optimizer adam \
+    --adam_lr 5e-5 \
+    --mc_therm 10 \
+    --mc_steps 100 \
+    --mc_stddev 10.0 \
+    --excite_gen_type 2 \
+    --boltzmann_weight_T 300.0 \
+    --mc_selfadjust_stepsize \
+    --mc_adjust_upper 0.60 \
+    --mc_adjust_lower 0.50
+```
+
 Inference from a saved checkpoint:
 
 ```bash
