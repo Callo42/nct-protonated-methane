@@ -119,27 +119,6 @@ uv run python -m neuralvib.inference \
     --mc_therm 10 --mc_steps 50 --mc_stddev 8.0 --batch 6000
 ```
 
-## Tests
-
-```bash
-uv run pytest neuralvib/molecule/ch5plus/JBB_Full_PES/tests/test_jbb.py
-uv run pytest neuralvib
-```
-
-## Repository layout
-
-```
-neuralvib/
-├── train.py                       Training CLI (python -m neuralvib.train)
-├── inference.py                   Inference CLI
-├── networks/                      RNVP and MoleNet normalizing flows
-├── molecule/
-│   └── ch5plus/
-│       ├── JBB_Full_PES/          Fortran sources + Makefile + JAX wrappers
-│       └── McCoy_NN_PES/          Pre-trained Flax neural-network PES
-└── utils/                         MCMC, energy estimator, loss, frame, etc.
-```
-
 ## License
 
 Apache 2.0. See [LICENSE](LICENSE).
